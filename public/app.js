@@ -275,7 +275,7 @@ function renderStatus() {
   const s = state.scan;
   const box = $('status');
   box.hidden = false;
-  box.className = `status${s.state === 'failed' ? ' failed' : ''}`;
+  box.className = `status${s.state === 'failed' || s.state === 'incomplete' ? ' failed' : ''}`;
   const where = s.source === 'phone' ? `${s.label}: ${s.path}` : s.path;
   const parts = [];
   if (s.state === 'scanning') {
@@ -284,7 +284,8 @@ function renderStatus() {
   } else if (s.state === 'failed') {
     parts.push(h('span', {}, `Scan of ${where} failed: ${s.error}`));
   } else {
-    parts.push(h('span', {}, `${s.state === 'cancelled' ? 'Stopped' : 'Scanned'} ${where}: `, h('b', {}, formatBytes(s.root?.size)),
+    if (s.state === 'incomplete') parts.push(h('div', { class: 'incomplete' }, h('b', {}, 'Incomplete: '), s.error));
+    parts.push(h('span', {}, `${s.state === 'cancelled' ? 'Stopped' : s.state === 'incomplete' ? 'Partly scanned' : 'Scanned'} ${where}: `, h('b', {}, formatBytes(s.root?.size)),
       ` in ${formatCount(s.root?.count)} files and ${formatCount(s.root?.dirCount)} folders, ${formatSeconds(s.seconds)}`,
       s.method === 'du' ? ' (sizes from du, rounded to whole KB)' : ''),
     h('button', { type: 'button', class: 'ghost', onclick: () => startScan(s.source === 'phone' ? { source: 'phone', serial: s.serial, path: s.path, label: s.label } : { source: 'local', path: s.path }) }, 'Scan again'));

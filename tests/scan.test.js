@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { createTree } from '../lib/tree.js';
 import { scanLocal } from '../lib/scan-local.js';
-import { scanPhone } from '../lib/scan-phone.js';
+import { LIST_END, scanPhone } from '../lib/scan-phone.js';
 import { getScan, scanStatus, startScan } from '../lib/scans.js';
 
 /** A stand-in for `adb shell …` that prints the given output and exits. */
@@ -35,12 +35,13 @@ test('scanPhone builds the tree from find/stat lines and reports unreadable fold
     `81b0|2000|1700000100|${root}/DCIM/a.jpg`,
     `81b0|500|1700000200|${root}/notes.txt`,
     `41f9|3488|1700000000|${root}/Android`,
+    LIST_END,
   ].join('\n');
   const tree = createTree(root);
   const errors = [];
   const r = await scanPhone({ adb: 'adb', serial: 'X', root, tree, onError: (p, c) => errors.push([p, c]), spawnAdb: fakeSpawn(out, `find: ${root}/Android/data: Permission denied\n`) });
   tree.finish();
-  assert.equal(r.method, 'stat');
+  assert.deepEqual(r, { method: 'stat' });
   assert.equal(tree.root.size, 2500);
   assert.equal(tree.root.count, 2);
   assert.equal(tree.root.dirCount, 2);
@@ -54,6 +55,29 @@ test('scanPhone reports unexpected phone errors, such as a batch over the argume
   const r = await scanPhone({ adb: 'adb', serial: 'X', root, tree, onError: (p, c) => errors.push([p, c]), spawnAdb: fakeSpawn(`81b0|5|1700000000|${root}/a.txt`, 'find: exec stat: Argument list too long\n') });
   assert.equal(r.method, 'stat');
   assert.deepEqual(errors, [[root, 'find: exec stat: Argument list too long']]);
+});
+
+test('scanPhone marks a listing cut off before its end marker as incomplete', async () => {
+  const root = '/sdcard';
+  const r = await scanPhone({ adb: 'adb', serial: 'X', root, tree: createTree(root), spawnAdb: fakeSpawn(`81b0|5|1700000000|${root}/a.txt
+81b0|7|1700000000|${root}/b.txt`, '', 1) });
+  assert.deepEqual(r, { method: 'stat', incomplete: true });
+  const spawned = [];
+  await scanPhone({ adb: 'adb', serial: 'X', root, tree: createTree(root), spawnAdb: (a, args) => { spawned.push(args.at(-1)); return fakeSpawn(`81b0|5|1|${root}/a
+${LIST_END}
+`)(a, args); } });
+  assert.ok(spawned[0].endsWith(`; echo ${LIST_END}`));
+});
+
+test('scanPhone keeps an incomplete listing but marks the scan incomplete', async () => {
+  const scan = startScan({ source: 'phone', path: '/sdcard', serial: 'X', adb: 'adb' }, {
+    scanPhone: async ({ tree }) => { tree.addFile(['a'], 10); return { method: 'stat', incomplete: true }; },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  const s = scanStatus(getScan(scan.id));
+  assert.equal(s.state, 'incomplete');
+  assert.match(s.error, /only part/);
+  assert.equal(s.root.size, 10);
 });
 
 test('scanPhone falls back to du when find/stat print nothing', async () => {
