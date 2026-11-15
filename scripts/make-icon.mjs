@@ -1,4 +1,5 @@
-// Draws build/icon.png (512 × 512, the installer's and the window's icon)
+// Draws build/icon.png (512 × 512: the installer's and the exe's icon, and the
+// development window's)
 // from public/icon.svg, the same picture the page uses as its logo, so the
 // two can't drift apart. Run by `npm run dist`. Uses headless Chrome to draw the SVG.
 
@@ -13,6 +14,8 @@ const mark = fileURLToPath(new URL('../public/icon.svg', import.meta.url));
 const out = fileURLToPath(new URL('../build/icon.png', import.meta.url));
 const SIZE = 512;
 
+// `--if-missing` (used by `npm run app`): keep an icon that is already there.
+if (process.argv.includes('--if-missing') && existsSync(out)) process.exit(0);
 if (!existsSync(CHROME)) {
   console.error(`Chrome not found at ${CHROME}: set CHROME to chrome.exe.`);
   process.exit(1);

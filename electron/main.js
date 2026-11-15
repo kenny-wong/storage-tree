@@ -9,6 +9,7 @@ import { app, BrowserWindow, Menu, dialog, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { linkAction, windowKey } from './links.js';
 
 const NAME = 'Storage Tree';
@@ -20,6 +21,15 @@ const bundledAdb = join(process.resourcesPath, 'adb', 'adb.exe');
 if (app.isPackaged && existsSync(bundledAdb)) process.env.STORAGE_TREE_BUNDLED_ADB = bundledAdb;
 // Only the installed app leaves "(dev)" out of the page and window title (GET /api/version `dev`).
 if (app.isPackaged) process.env.STORAGE_TREE_INSTALLED = '1';
+
+// The taskbar groups windows and picks their icon by this id; a development
+// copy gets its own, so it isn't shown as Electron.
+app.setAppUserModelId(app.isPackaged ? 'io.github.kenny-wong.storage-tree' : 'io.github.kenny-wong.storage-tree.dev');
+
+// The installed app's window takes its icon from Storage Tree.exe (built from
+// build/icon.png); a development copy runs electron.exe, so it is given the
+// picture itself (`npm run app` draws it when missing).
+const devIcon = fileURLToPath(new URL('../build/icon.png', import.meta.url));
 
 let win = null;
 
@@ -39,6 +49,7 @@ function openWindow(address, runningTasks) {
     height: 900,
     title: app.isPackaged ? NAME : `${NAME} (dev)`,
     backgroundColor: '#f4f6f5',
+    icon: !app.isPackaged && existsSync(devIcon) ? devIcon : undefined,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
