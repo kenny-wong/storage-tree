@@ -47,6 +47,15 @@ test('scanPhone builds the tree from find/stat lines and reports unreadable fold
   assert.deepEqual(errors, [[`${root}/Android/data`, 'Permission denied']]);
 });
 
+test('scanPhone reports unexpected phone errors, such as a batch over the argument limit', async () => {
+  const root = '/sdcard';
+  const tree = createTree(root);
+  const errors = [];
+  const r = await scanPhone({ adb: 'adb', serial: 'X', root, tree, onError: (p, c) => errors.push([p, c]), spawnAdb: fakeSpawn(`81b0|5|1700000000|${root}/a.txt`, 'find: exec stat: Argument list too long\n') });
+  assert.equal(r.method, 'stat');
+  assert.deepEqual(errors, [[root, 'find: exec stat: Argument list too long']]);
+});
+
 test('scanPhone falls back to du when find/stat print nothing', async () => {
   const tree = createTree('/sdcard');
   const r = await scanPhone({

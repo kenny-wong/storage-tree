@@ -31,7 +31,7 @@ test('serialParam accepts adb serials and refuses anything else', () => {
 test('shQuote makes any path one safe shell word', () => {
   assert.equal(shQuote('/sdcard/My Files'), "'/sdcard/My Files'");
   assert.equal(shQuote("/sdcard/it's"), "'/sdcard/it'\\''s'");
-  assert.equal(listCommand('/sdcard/a b'), "find -H '/sdcard/a b' -exec stat -c '%f|%s|%Y|%n' {} +");
+  assert.equal(listCommand('/sdcard/a b'), "find -H '/sdcard/a b' -print0 | xargs -0 stat -c '%f|%s|%Y|%n'");
 });
 
 test('phonePath needs an absolute path and tidies slashes', () => {

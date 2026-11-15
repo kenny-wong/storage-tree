@@ -40,7 +40,7 @@ npm run dist   # the Windows installer in dist/ (draws the icon, copies this PC'
 
 - `server.js`: a small HTTP server on 127.0.0.1 only; the API refuses other hosts and cross-site writes.
 - `lib/scan-local.js`: walks a folder with many reads at once (`readdir` + `lstat`), not following links or junctions.
-- `lib/scan-phone.js`: runs `find -H <folder> -exec stat -c '%f|%s|%Y|%n' {} +` on the phone through `adb shell` and reads the lines as they arrive; falls back to `du -a -k` on phones that can't.
+- `lib/scan-phone.js`: runs `find -H <folder> -print0 | xargs -0 stat -c '%f|%s|%Y|%n'` on the phone through `adb shell` and reads the lines as they arrive; falls back to `du -a -k` on phones that can't.
 - `lib/adb.js`: finds adb and parses `adb devices -l`, `df -k`, `dumpsys diskstats`, `adb pair`, `adb connect` and `adb mdns services`; merges a phone's USB and Wi-Fi entries by its serial number.
 - `lib/tree.js`: the folder tree, totals, largest files and file types, and taking deleted entries out. Scans are kept in memory (the newest 3).
 - `lib/remove.js`: the Recycle Bin (Windows' `SHFileOperation` through PowerShell) and `rm -rf` on a phone.
