@@ -891,7 +891,13 @@ function renderLegend() {
 /* ---------- start ---------- */
 
 function init() {
-  api('/api/version').then((v) => { $('version').textContent = `v${v.version}`; state.info = v; }).catch(() => {});
+  api('/api/version').then((v) => {
+    state.info = v;
+    $('version').textContent = `v${v.version}${v.dev ? ' (dev)' : ''}`;
+    $('version').classList.toggle('dev', Boolean(v.dev));
+    // The desktop app's window takes this title too, so a development copy can't be taken for the installed one.
+    document.title = v.dev ? 'Storage Tree (dev)' : 'Storage Tree';
+  }).catch(() => {});
   $('mode-local').addEventListener('click', () => setMode('local'));
   $('mode-phone').addEventListener('click', () => setMode('phone'));
   $('local-form').addEventListener('submit', (e) => { e.preventDefault(); scanLocal(); });

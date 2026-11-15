@@ -18,10 +18,11 @@ import { homedir } from 'node:os';
 export const PORT = Number(process.env.PORT) || 8850;
 const ROOT = fileURLToPath(new URL('./public/', import.meta.url));
 const CHROME = process.env.CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+// Every copy but the installed app is a development copy (`npm start`, `npm run app`): the page then says "(dev)" in its title.
 export const VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 
 const ROUTES = [
-  ['GET', '/api/version', () => ({ status: 200, body: { version: VERSION, downloads: join(homedir(), 'Downloads'), app: Boolean(process.versions.electron) } })],
+  ['GET', '/api/version', () => ({ status: 200, body: { version: VERSION, downloads: join(homedir(), 'Downloads'), app: Boolean(process.versions.electron), dev: !process.env.STORAGE_TREE_INSTALLED } })],
   ['GET', '/api/drives', sources.drives],
   ['GET', '/api/devices', sources.devices],
   ['GET', '/api/devices/:serial/storage', sources.storage],

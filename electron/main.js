@@ -18,6 +18,8 @@ const PORT = app.isPackaged ? 8851 : 8852;
 if (process.env.LOCALAPPDATA) app.setPath('userData', join(process.env.LOCALAPPDATA, app.isPackaged ? NAME : `${NAME} (development)`));
 const bundledAdb = join(process.resourcesPath, 'adb', 'adb.exe');
 if (app.isPackaged && existsSync(bundledAdb)) process.env.STORAGE_TREE_BUNDLED_ADB = bundledAdb;
+// Only the installed app leaves "(dev)" out of the page and window title (GET /api/version `dev`).
+if (app.isPackaged) process.env.STORAGE_TREE_INSTALLED = '1';
 
 let win = null;
 

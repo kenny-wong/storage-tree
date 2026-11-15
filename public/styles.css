@@ -90,6 +90,7 @@ button { cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand h1 { font-size: 18px; margin: 0; font-weight: 650; }
 .version { color: var(--muted); font-size: 12px; }
+.version.dev { color: var(--warn-text); background: var(--warn-bg); padding: 1px 6px; border-radius: 5px; }
 
 .modes, .tabs { display: flex; gap: 2px; background: var(--panel-2); padding: 3px; border-radius: 9px; }
 .modes button, .tabs button {

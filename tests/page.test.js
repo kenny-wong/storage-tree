@@ -91,3 +91,25 @@ test('the desktop window keeps its own pages, opens web links in the browser and
   assert.equal(windowKey({ type: 'keyDown', key: 'I', control: true, shift: true }), 'devtools');
   assert.equal(windowKey({ type: 'keyUp', key: 'F5' }), null);
 });
+
+test('/api/version marks every copy but the installed app as a development copy', async () => {
+  const { createApp } = await import('../server.js');
+  const get = async (installed) => {
+    if (installed) process.env.STORAGE_TREE_INSTALLED = '1';
+    else delete process.env.STORAGE_TREE_INSTALLED;
+    const server = createApp({ port: 0 });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address();
+    // allowed() checks the Host against the port the app was made for, so make it for this one.
+    server.removeAllListeners('request');
+    server.on('request', createApp({ port }).listeners('request')[0]);
+    try {
+      return await (await fetch(`http://127.0.0.1:${port}/api/version`)).json();
+    } finally {
+      server.close();
+      delete process.env.STORAGE_TREE_INSTALLED;
+    }
+  };
+  assert.equal((await get(false)).dev, true);
+  assert.equal((await get(true)).dev, false);
+});
