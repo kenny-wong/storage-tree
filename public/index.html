@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Storage Tree</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="icon.svg" alt="" width="26" height="26">
+      <h1>Storage Tree</h1>
+      <span class="version" id="version">v1.0.0</span>
+    </div>
+    <div class="modes" role="tablist" aria-label="What to scan">
+      <button type="button" role="tab" id="mode-local" aria-selected="true">This PC</button>
+      <button type="button" role="tab" id="mode-phone" aria-selected="false">Phone (USB)</button>
+    </div>
+  </header>
+
+  <section class="source" id="source-local">
+    <div class="drives" id="drives"></div>
+    <form class="scan-form" id="local-form">
+      <input id="local-path" type="text" placeholder="Folder, e.g. C:\Users or D:" autocomplete="off" spellcheck="false" aria-label="Folder on this PC">
+      <button type="submit" class="primary">Scan</button>
+    </form>
+  </section>
+
+  <section class="source" id="source-phone" hidden>
+    <div class="phone-row">
+      <label class="field">Phone
+        <select id="device"></select>
+      </label>
+      <button type="button" id="refresh-devices" class="ghost">Refresh</button>
+      <form class="scan-form" id="phone-form">
+        <input id="phone-path" type="text" value="/storage/emulated/0" autocomplete="off" spellcheck="false" aria-label="Folder on the phone">
+        <button type="submit" class="primary">Scan phone</button>
+      </form>
+    </div>
+    <div class="phone-help" id="phone-help" hidden></div>
+    <div class="phone-summary" id="phone-summary" hidden></div>
+  </section>
+
+  <section class="status" id="status" hidden></section>
+
+  <main id="results" hidden>
+    <div class="toolbar">
+      <nav class="crumbs" id="crumbs" aria-label="Folder path"></nav>
+      <div class="tabs" role="tablist" aria-label="Views">
+        <button type="button" role="tab" data-tab="tree" aria-selected="true">Folders</button>
+        <button type="button" role="tab" data-tab="largest" aria-selected="false">Largest files</button>
+        <button type="button" role="tab" data-tab="types" aria-selected="false">File types</button>
+        <button type="button" role="tab" data-tab="apps" aria-selected="false" id="tab-apps" hidden>Apps</button>
+      </div>
+    </div>
+    <div class="panes">
+      <section class="pane list-pane">
+        <div class="view" id="view-tree">
+          <div class="grid-head tree-cols"><span>Name</span><span class="num">Size</span><span>Share</span><span class="num files-col">Files</span><span class="num hide-narrow">Modified</span></div>
+          <div class="rows" id="tree" role="tree"></div>
+        </div>
+        <div class="view" id="view-largest" hidden>
+          <div class="grid-head file-cols"><span>File</span><span class="num">Size</span><span class="num hide-narrow">Modified</span></div>
+          <div class="rows" id="largest"></div>
+        </div>
+        <div class="view" id="view-types" hidden>
+          <div class="grid-head type-cols"><span>Type</span><span class="num">Size</span><span>Share</span><span class="num">Files</span></div>
+          <div class="rows" id="types"></div>
+        </div>
+        <div class="view" id="view-apps" hidden>
+          <p class="note" id="apps-note"></p>
+          <div class="grid-head app-cols"><span>App</span><span class="num">Total</span><span class="num">App</span><span class="num">Data</span><span class="num hide-narrow">Cache</span></div>
+          <div class="rows" id="apps"></div>
+        </div>
+      </section>
+      <section class="pane map-pane">
+        <div class="map-head"><strong id="map-title"></strong><span id="map-size"></span></div>
+        <div class="map-wrap" id="map-wrap">
+          <canvas id="map" aria-label="Treemap of the selected folder"></canvas>
+          <div class="tip" id="tip" hidden></div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
