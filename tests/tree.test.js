@@ -51,7 +51,17 @@ test('childrenOf lists folders and files together, biggest first, with a "more" 
   assert.equal(kids[3].empty, true);
   const two = childrenOf(t.root, { limit: 2 });
   assert.equal(two.length, 3);
-  assert.deepEqual(two[2], { kind: 'more', name: '2 more', count: 2, size: 10 });
+  assert.deepEqual(two[2], { kind: 'more', name: '2 smaller items', count: 2, files: 1, dirs: 1, size: 10, ext: '' });
+});
+
+test('the "more" row names what it holds and the extension with most of its bytes', () => {
+  const t = createTree('/c');
+  t.addFile(['big.mp4'], 1000, 1);
+  for (let i = 0; i < 5; i++) t.addFile([`p${i}.jpg`], 50, 1);
+  t.addFile(['clip.mp4'], 40, 1);
+  t.finish();
+  const kids = childrenOf(t.root, { limit: 1 });
+  assert.deepEqual(kids[1], { kind: 'more', name: '6 smaller files', count: 6, files: 6, dirs: 0, size: 290, ext: 'jpg' });
 });
 
 test('childrenOf with depth 2 fills in the sub-folders for the treemap', () => {

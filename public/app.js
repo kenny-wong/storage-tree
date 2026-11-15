@@ -3,6 +3,7 @@
 
 import { formatBytes, formatCount, formatDate, formatPercent, formatSeconds } from './format.js';
 import { KIND_NAMES, kindOf } from './kinds.js';
+import { appDirsSize, isWholeShared, notScanned, phoneUsed } from './phone-gap.js';
 import { squarify } from './treemap.js';
 
 const $ = (id) => document.getElementById(id);
@@ -165,7 +166,10 @@ async function onDeviceChange() {
     state.storage = s;
     state.storageSerial = d.serial;
     renderPhoneSummary(s);
-    if (state.scan?.source === 'phone' && state.scan.serial === d.serial) renderApps();
+    if (state.scan?.source === 'phone' && state.scan.serial === d.serial) {
+      renderApps();
+      if (state.scan.state !== 'scanning') renderStatus();
+    }
   } catch (err) {
     box.replaceChildren(h('span', { class: 'muted' }, `Could not read storage: ${err.message}`));
   }
@@ -181,7 +185,7 @@ function renderPhoneSummary(s) {
   const data = s.df.find((f) => f.mount === '/data') ?? s.df[0];
   const total = data?.total ?? s.total;
   const free = data?.free ?? s.free;
-  const used = total != null && free != null ? total - free : null;
+  const used = phoneUsed(s);
   const cats = s.categories.filter((c) => c.key in CAT_STYLE && c.size > 0);
   const cache = s.categories.find((c) => c.key === 'appCache');
   box.replaceChildren(
@@ -283,12 +287,32 @@ function renderStatus() {
       ` in ${formatCount(s.root?.count)} files and ${formatCount(s.root?.dirCount)} folders, ${formatSeconds(s.seconds)}`,
       s.method === 'du' ? ' (sizes from du, rounded to whole KB)' : ''),
     h('button', { type: 'button', class: 'ghost', onclick: () => startScan(s.source === 'phone' ? { source: 'phone', serial: s.serial, path: s.path, label: s.label } : { source: 'local', path: s.path }) }, 'Scan again'));
+    const gap = phoneGapLine(s);
+    if (gap) parts.push(gap);
   }
   if (s.errorCount) {
     parts.push(h('details', {}, h('summary', {}, `${formatCount(s.errorCount)} ${s.errorCount === 1 ? 'place' : 'places'} could not be read${s.source === 'phone' ? ' (Android keeps some folders private to their apps)' : ''}`),
       h('ul', {}, s.errors.map((e) => h('li', {}, `${e.path} — ${e.code}`)))));
   }
   box.replaceChildren(...parts);
+}
+
+/** "Not in this scan: …" under a finished scan of a phone's whole shared storage, or null. */
+function phoneGapLine(s) {
+  const root = state.nodes.get(0);
+  if (s.source !== 'phone' || s.state !== 'done' || !isWholeShared(s.path) || !root) return null;
+  if (!state.storage || state.storageSerial !== s.serial) return null;
+  const used = phoneUsed(state.storage);
+  const g = notScanned({ used, scanned: s.root?.size, categories: state.storage.categories, appDirs: appDirsSize(root) });
+  if (!g) return null;
+  const parts = [
+    ['installed apps', g.apps, ''],
+    ['apps’ private data', g.privateData, 'about '],
+    ['Android’s own files', g.android, 'about '],
+  ].filter(([, n]) => n > 0).map(([what, n, about]) => `${what} ${about}${formatBytes(n)}`);
+  return h('div', { class: 'gap', title: 'Phone’s used space minus this scan, split by Android’s own daily count. Android keeps these out of reach without root.' },
+    'Not in this scan: ', h('b', {}, formatBytes(g.gap)), ` of the ${formatBytes(used)} used`,
+    parts.length ? ` (${parts.join(', ')}), which can’t be read without root.` : ', which can’t be read without root.');
 }
 
 /* ---------- results ---------- */
@@ -305,6 +329,7 @@ async function showResults() {
   $('tab-apps').hidden = state.scan.source !== 'phone';
   if (state.tab === 'apps' && state.scan.source !== 'phone') state.tab = 'tree';
   await select(0);
+  if (state.scan.source === 'phone') renderStatus(); // the root node is loaded now, for the "Not in this scan" line
 }
 
 async function select(nid) {
@@ -792,14 +817,17 @@ function drawMap() {
   };
 
   const leaf = (c, r, depth, parentId) => {
-    const color = c.kind === 'file' ? colors[kindOf(c.ext)] : c.kind === 'dir' ? colors.dir : colors.other;
+    const more = c.kind === 'more';
+    const color = c.kind === 'file' || (more && c.ext) ? colors[kindOf(c.ext)] : c.kind === 'dir' || more ? colors.dir : colors.other;
     ctx.fillStyle = color;
     ctx.fillRect(r.x, r.y, r.w, r.h);
+    if (more) moreTexture(ctx, r);
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1;
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, Math.max(0, r.w - 1), Math.max(0, r.h - 1));
-    if (r.w > 40 && r.h > 18) label(c.name, r.x + 4, r.y + 3, r.w - 8, c.kind === 'dir' ? dirText : textColor);
-    if (r.w > 50 && r.h > 34) label(formatBytes(c.size), r.x + 4, r.y + 17, r.w - 8, c.kind === 'dir' ? dirText : textColor);
+    const ink = c.kind === 'dir' || (more && !c.ext) ? dirText : textColor;
+    if (r.w > 40 && r.h > 18) label(c.name, r.x + 4, r.y + 3, r.w - 8, ink);
+    if (r.w > 50 && r.h > 34) label(formatBytes(c.size), r.x + 4, r.y + 17, r.w - 8, ink);
     mapBoxes.push({ c, r, depth, parentId });
   };
 
@@ -823,6 +851,23 @@ function drawMap() {
   layout(n.children, { x: 0, y: 0, w, h: hgt }, 0, n.id);
 }
 
+/** Many small files drawn as one box: fine diagonal lines over the colour, so it reads as a crowd, not one big file. */
+function moreTexture(ctx, r) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let d = -r.h; d < r.w; d += 7) {
+    ctx.moveTo(r.x + d, r.y + r.h);
+    ctx.lineTo(r.x + d + r.h, r.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 function boxAt(ev) {
   const rect = $('map').getBoundingClientRect();
   const x = ev.clientX - rect.left;
@@ -841,10 +886,13 @@ function onMapMove(ev) {
     tip.hidden = true;
     return;
   }
-  const { c } = found.hit;
+  const { c, parentId } = found.hit;
   const parent = state.nodes.get(state.selected);
+  const extra = c.kind === 'dir' ? `${formatCount(c.count)} files · click to open`
+    : c.kind === 'file' ? KIND_NAMES[kindOf(c.ext)]
+      : c.kind === 'more' ? moreTip(c, parentId) : '';
   tip.replaceChildren(h('b', {}, c.name), `${formatBytes(c.size)} · ${formatPercent(c.size, parent?.size)} of this folder`,
-    c.kind === 'dir' ? h('div', {}, `${formatCount(c.count)} files · click to open`) : c.kind === 'file' ? h('div', {}, KIND_NAMES[kindOf(c.ext)]) : null);
+    ...(extra ? [h('div', {}, extra)] : []));
   tip.hidden = false;
   const wrap = $('map-wrap');
   const tx = Math.min(found.x + 14, wrap.clientWidth - tip.offsetWidth - 4);
@@ -853,12 +901,20 @@ function onMapMove(ev) {
   tip.style.top = `${Math.max(4, ty)}px`;
 }
 
+/** "Too small to draw one by one, mostly Pictures (.jpg) · click to open Camera" for a box of many small items. */
+function moreTip(c, parentId) {
+  const what = c.ext ? `mostly ${KIND_NAMES[kindOf(c.ext)]} (.${c.ext})` : c.dirs ? 'mostly folders' : '';
+  const open = parentId !== state.selected ? ' · click to open the folder and see them' : '';
+  return `Too small to draw one by one${what ? `, ${what}` : ''}${open}`;
+}
+
 function onMapClick(ev) {
   const found = boxAt(ev);
   if (!found) return;
   // Open the outermost folder under the pointer (the one in this folder), or the inner one when clicked directly.
-  const { c } = found.hit;
+  const { c, parentId } = found.hit;
   if (c.kind === 'dir') select(c.id);
+  else if (c.kind === 'more' && parentId !== state.selected) select(parentId);
 }
 
 /** Right-click on the treemap: the same menu as the lists, for the box under the pointer. */
