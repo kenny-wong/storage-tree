@@ -4,6 +4,7 @@ See what fills a disk, on this PC or on an Android phone connected by USB or Wi-
 
 - **Folders**: a tree sorted by size, with each folder's share of its parent, file count and last change.
 - **Treemap**: boxes sized by space, nested three levels and coloured by kind of file (pictures, videos, apps, …). Click a folder to open it. Files too small to draw one by one share a striped box, coloured by what most of them are; click it to open their folder.
+- **Phone folders explained**: well-known folders (DCIM, Download, Android/data, Android/media, WhatsApp media, thumbnails, …) carry a tag saying what they hold, coloured by whether they are your files, an app's files or safe to clear; the open folder is described above the list, and a Phone folders guide lists the usual layout with this phone's sizes and what lives outside shared storage.
 - **Largest files** and **File types** below the folder you are looking at.
 - **Phone**: total and free space, Android's own count by kind (apps, photos, videos, system, …) and the size of every app. After a scan of the whole phone, a line says how much of the used space the scan can't see (installed apps, apps' private data and Android's own files, which need root).
 - **Delete**: right-click a folder or file (in the lists or the treemap) or use its ⋯ button. On this PC it goes to the Recycle Bin; on a phone it is deleted for good, which the app says before asking. The totals update without scanning again. The Delete key deletes the open folder.

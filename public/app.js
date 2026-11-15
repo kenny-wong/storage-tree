@@ -4,6 +4,7 @@
 import { formatBytes, formatCount, formatDate, formatPercent, formatSeconds } from './format.js';
 import { KIND_NAMES, kindOf } from './kinds.js';
 import { appDirsSize, isWholeShared, notScanned, phoneUsed } from './phone-gap.js';
+import { describePhoneFolder, findIn, GUIDE, KINDS } from './phone-folders.js';
 import { squarify } from './treemap.js';
 
 const $ = (id) => document.getElementById(id);
@@ -341,6 +342,7 @@ async function select(nid) {
   }
   if (state.selected !== nid) return;
   renderCrumbs(n);
+  renderAbout(n);
   renderTree();
   $('tree').querySelector('.row.sel')?.scrollIntoView({ block: 'nearest' });
   drawMap();
@@ -354,6 +356,73 @@ function renderCrumbs(n) {
     i ? h('span', { class: 'sep', 'aria-hidden': 'true' }, '›') : null,
     h('button', { type: 'button', 'aria-current': i === n.crumbs.length - 1 ? 'page' : null, title: c.name, onclick: () => select(c.id) }, c.name),
   ]).filter(Boolean));
+}
+
+/** A phone folder's tag, or null (only on phone scans). */
+function folderInfo(path) {
+  return state.scan?.source === 'phone' ? describePhoneFolder(path) : null;
+}
+
+const tagEl = (info) => h('small', { class: `ftag ${info.kind}`, title: `${info.about}\n\n${KINDS[info.kind]}` }, info.tag);
+
+/** The line under the toolbar: what the open phone folder is for, and the guide. */
+function renderAbout(n) {
+  const box = $('folder-about');
+  if (state.scan?.source !== 'phone') {
+    box.hidden = true;
+    return;
+  }
+  const info = describePhoneFolder(n.path);
+  const guide = h('button', { type: 'button', class: 'link', onclick: openGuide }, 'Phone folders guide');
+  box.replaceChildren(...(info
+    ? [tagEl(info), h('span', {}, info.about), h('span', { class: 'hint' }, KINDS[info.kind] + '.'), guide]
+    : [h('span', { class: 'hint' }, 'Not one of the usual phone folders. The tags beside folders say what the known ones are for.'), guide]));
+  box.hidden = false;
+}
+
+/** The guide: the usual layout with this phone's sizes, and what lives outside shared storage. */
+function openGuide() {
+  const root = state.nodes.get(0);
+  const whole = root && isWholeShared(state.scan?.path);
+  const sizeOf = (rel) => {
+    if (!whole) return '';
+    const d = findIn(root, rel);
+    return d ? formatBytes(d.size) : 'not on this phone';
+  };
+  const rows = [
+    guideRow('/storage/emulated/0', null, '', root && whole ? formatBytes(root.size) : '', 0),
+    ...GUIDE.map(([rel, depth]) => guideRow(rel, rel, `/storage/emulated/0/${rel}`, sizeOf(rel), depth)),
+  ];
+  const gap = whole && state.storage && state.storageSerial === state.scan.serial
+    ? notScanned({ used: phoneUsed(state.storage), scanned: state.scan.root?.size, categories: state.storage.categories, appDirs: appDirsSize(root) })
+    : null;
+  const system = state.storage?.categories.find((c) => c.key === 'system')?.size;
+  const outside = [
+    ['/data/app', 'Installed apps', 'The apps themselves (APK files). Remove an app to free this.', gap ? formatBytes(gap.apps) : ''],
+    ['/data/data', 'Apps’ private data', 'Each app’s settings, databases and caches, private to the app. Clear it in Settings › Apps › the app › Storage.', gap ? `about ${formatBytes(gap.privateData)}` : ''],
+    ['/data (other)', 'Android’s own files', 'Compiled app code, system databases and logs on the data partition.', gap ? `about ${formatBytes(gap.android)}` : ''],
+    ['system partitions', 'System', 'Android itself, outside the data partition; not part of “used”. Can’t be changed.', system ? formatBytes(system) : ''],
+  ].map(([path, tag, about, size]) => h('div', { class: 'guide-row outside' },
+    h('div', { class: 'gname' }, h('code', {}, path), h('small', { class: 'ftag info' }, tag)),
+    h('div', { class: 'gsize' }, size), h('div', { class: 'gabout' }, about)));
+  $('guide-body').replaceChildren(
+    h('p', { class: 'intro' }, 'Everything the app can scan lives in shared storage, /storage/emulated/0 (also called /sdcard or “Internal storage”). These are the folders most phones have and what they hold.'),
+    h('div', { class: 'kinds' }, ...Object.entries(KINDS).filter(([k]) => k !== 'info').map(([k, text]) => h('span', {}, h('small', { class: `ftag ${k}` }, { yours: 'Your files', app: 'App files', clear: 'Can clear' }[k]), text))),
+    h('div', { class: 'guide-list' }, ...rows),
+    h('h3', {}, 'Outside shared storage (needs root, so not scanned)'),
+    h('div', { class: 'guide-list' }, ...outside),
+  );
+  const dlg = $('guide-dialog');
+  dlg.showModal();
+  dlg.scrollTop = 0; // focusing Close would otherwise start it at the bottom
+}
+
+function guideRow(label, rel, path, size, depth) {
+  const info = describePhoneFolder(path || label);
+  return h('div', { class: `guide-row d${depth}` },
+    h('div', { class: 'gname' }, h('code', {}, rel ? rel.split('/').pop() : label), info ? tagEl(info) : null),
+    h('div', { class: 'gsize' }, size),
+    h('div', { class: 'gabout' }, info?.about ?? ''));
 }
 
 async function toggle(nid) {
@@ -388,11 +457,13 @@ function dirRow(c, depth, parentSize, loaded, path) {
   const open = state.expanded.has(c.id) && loaded;
   const canOpen = !c.empty;
   const item = dirItem(c, path);
+  const info = folderInfo(path);
   return h('div', { class: `row tree-cols dir-row${state.selected === c.id ? ' sel' : ''}`, role: 'treeitem', 'aria-expanded': canOpen ? String(open) : null, onclick: () => select(c.id), ondblclick: () => toggle(c.id), oncontextmenu: (e) => openMenu(e, item) },
     h('div', { class: 'name', style: `padding-left:${depth * 16}px` },
       h('button', { type: 'button', class: `caret${canOpen ? '' : ' blank'}`, 'aria-expanded': String(open), 'aria-label': open ? 'Collapse' : 'Expand', onclick: (e) => { e.stopPropagation(); toggle(c.id); } }, caretSvg()),
       h('i', { class: 'dot', style: 'background:var(--k-dir);outline:1px solid var(--line)' }),
       h('span', { class: 'label', title: c.name }, c.name),
+      info ? tagEl(info) : null,
       moreButton(item)),
     h('div', { class: 'num' }, formatBytes(c.size)),
     h('div', { class: 'share' }, meter(c.size, parentSize), h('span', { class: 'pct' }, formatPercent(c.size, parentSize))),
@@ -888,7 +959,8 @@ function onMapMove(ev) {
   }
   const { c, parentId } = found.hit;
   const parent = state.nodes.get(state.selected);
-  const extra = c.kind === 'dir' ? `${formatCount(c.count)} files · click to open`
+  const tag = c.kind === 'dir' ? folderInfo(joinPath(mapPathOf(parentId), c.name))?.tag : null;
+  const extra = c.kind === 'dir' ? `${tag ? `${tag} · ` : ''}${formatCount(c.count)} files · click to open`
     : c.kind === 'file' ? KIND_NAMES[kindOf(c.ext)]
       : c.kind === 'more' ? moreTip(c, parentId) : '';
   tip.replaceChildren(h('b', {}, c.name), `${formatBytes(c.size)} · ${formatPercent(c.size, parent?.size)} of this folder`,

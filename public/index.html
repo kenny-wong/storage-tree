@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="icon.svg" alt="" width="26" height="26">
       <h1>Storage Tree</h1>
-      <span class="version" id="version">v1.2.0</span>
+      <span class="version" id="version">v1.3.0</span>
     </div>
     <div class="modes" role="tablist" aria-label="What to scan">
       <button type="button" role="tab" id="mode-local" aria-selected="true">This PC</button>
@@ -58,6 +58,7 @@
         <button type="button" role="tab" data-tab="apps" aria-selected="false" id="tab-apps" hidden>Apps</button>
       </div>
     </div>
+    <p class="folder-about" id="folder-about" hidden></p>
     <div class="panes">
       <section class="pane list-pane">
         <div class="view" id="view-tree">
@@ -91,6 +92,14 @@
 
   <div class="menu" id="menu" role="menu" hidden></div>
   <div class="toast" id="toast" role="status" hidden></div>
+
+  <dialog id="guide-dialog" class="dialog wide guide">
+    <form method="dialog">
+      <h2>Folders on an Android phone</h2>
+      <div id="guide-body"></div>
+      <div class="dialog-buttons"><button type="submit" class="primary">Close</button></div>
+    </form>
+  </dialog>
 
   <dialog id="delete-dialog" class="dialog">
     <form method="dialog">

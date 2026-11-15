@@ -16,6 +16,11 @@
   --err-text: #8a1f10;
   --sel: #dcefe7;
   --hover: #f0f5f2;
+  /* folder tags: your files / app files / safe to clear / container */
+  --tag-yours-bg: #dcebf8; --tag-yours-text: #164a78;
+  --tag-app-bg: #f6e7d2; --tag-app-text: #6e4209;
+  --tag-clear-bg: #d9f0e2; --tag-clear-text: #165c35;
+  --tag-info-bg: #e8ecea; --tag-info-text: #46534d;
   /* treemap colours by kind (checked for separation in light and dark) */
   --k-image: #3b82c4;
   --k-video: #c2477a;
@@ -61,6 +66,10 @@
     --k-dir: #34413b;
     --map-text: #0b1210;
     --map-line: #1a211e;
+    --tag-yours-bg: #1b3247; --tag-yours-text: #a9d0f2;
+    --tag-app-bg: #3a2c17; --tag-app-text: #f0c98a;
+    --tag-clear-bg: #173426; --tag-clear-text: #95dcb2;
+    --tag-info-bg: #27302c; --tag-info-text: #b4c1bb;
   }
 }
 
@@ -237,6 +246,7 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1
   .files-col { display: none; }
   .tree-cols { grid-template-columns: minmax(0, 1fr) 66px 44px; gap: 6px; }
   .row .actions { display: none; }
+  .row .ftag { display: none; }
 }
 @media (max-width: 640px) {
   .top { flex-wrap: wrap; }
@@ -330,3 +340,30 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1
 .task details ul { margin: 4px 0; padding-left: 18px; max-height: 140px; overflow: auto; }
 .task.done .meter > i { background: var(--bar); }
 .tasks-head { display: flex; justify-content: flex-end; font-size: 13px; margin-bottom: -4px; }
+
+/* what a phone folder is for */
+.ftag { flex-shrink: 0; font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 999px; white-space: nowrap; }
+.row .name small.ftag { overflow: visible; }
+.ftag.yours { background: var(--tag-yours-bg); color: var(--tag-yours-text); }
+.ftag.app { background: var(--tag-app-bg); color: var(--tag-app-text); }
+.ftag.clear { background: var(--tag-clear-bg); color: var(--tag-clear-text); }
+.ftag.info { background: var(--tag-info-bg); color: var(--tag-info-text); }
+.row .name small.ftag.yours { color: var(--tag-yours-text); }
+.row .name small.ftag.app { color: var(--tag-app-text); }
+.row .name small.ftag.clear { color: var(--tag-clear-text); }
+.row .name small.ftag.info { color: var(--tag-info-text); }
+.folder-about { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; line-height: 1.45; font-size: 13px; }
+.folder-about .hint { color: var(--muted); }
+.folder-about .link { margin-left: auto; }
+.guide .intro { color: var(--muted); }
+.guide .kinds { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 12px; font-size: 13px; }
+.guide .kinds span { display: inline-flex; align-items: center; gap: 6px; }
+.guide-list { border-top: 1px solid var(--line); }
+.guide-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.guide-row .gname { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
+.guide-row .gname code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; }
+.guide-row .gsize { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.guide-row .gabout { grid-column: 1 / -1; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.guide-row.d1 { padding-left: 22px; }
+.guide-row.outside .gname code { color: var(--muted); }
+.guide h3 { margin: 16px 0 4px; font-size: 14px; }
