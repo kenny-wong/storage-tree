@@ -12,6 +12,8 @@ import { spawn } from 'node:child_process';
 import { allowed, fail, route } from './lib/http.js';
 import * as sources from './api/sources.js';
 import * as scans from './api/scans.js';
+import * as tasks from './api/tasks.js';
+import { homedir } from 'node:os';
 
 export const PORT = Number(process.env.PORT) || 8850;
 const ROOT = fileURLToPath(new URL('./public/', import.meta.url));
@@ -19,10 +21,13 @@ const CHROME = process.env.CHROME || 'C:\\Program Files\\Google\\Chrome\\Applica
 export const VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 
 const ROUTES = [
-  ['GET', '/api/version', () => ({ status: 200, body: { version: VERSION } })],
+  ['GET', '/api/version', () => ({ status: 200, body: { version: VERSION, downloads: join(homedir(), 'Downloads'), app: Boolean(process.versions.electron) } })],
   ['GET', '/api/drives', sources.drives],
   ['GET', '/api/devices', sources.devices],
   ['GET', '/api/devices/:serial/storage', sources.storage],
+  ['POST', '/api/wireless/pair', sources.pair],
+  ['POST', '/api/wireless/connect', sources.connect],
+  ['POST', '/api/wireless/disconnect', sources.disconnect],
   ['POST', '/api/scans', scans.create],
   ['GET', '/api/scans/:id', scans.status],
   ['POST', '/api/scans/:id/cancel', scans.cancel],
@@ -31,6 +36,13 @@ const ROUTES = [
   ['GET', '/api/scans/:id/largest', scans.largest],
   ['GET', '/api/scans/:id/types', scans.types],
   ['POST', '/api/scans/:id/reveal', scans.reveal],
+  ['POST', '/api/scans/:id/delete', scans.removeItem],
+  ['POST', '/api/scans/:id/pull', scans.pull],
+  ['GET', '/api/scans/:id/file', scans.file],
+  ['GET', '/api/tasks', tasks.list],
+  ['POST', '/api/tasks/:id/cancel', tasks.cancel],
+  ['POST', '/api/tasks/:id/reveal', tasks.reveal],
+  ['DELETE', '/api/tasks/:id', tasks.dismiss],
 ];
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon' };
@@ -79,6 +91,7 @@ export function createApp({ port = PORT } = {}) {
         const hit = route(ROUTES, req.method, url.pathname);
         const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : null;
         const out = hit ? await hit.handler({ params: hit.params, query: url.searchParams, body }) : fail(404, 'no-route', 'No such API route.');
+        if (out.raw) return out.raw(res); // a file's bytes, streamed
         res.writeHead(out.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
         res.end(JSON.stringify(out.body));
         return;

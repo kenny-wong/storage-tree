@@ -80,3 +80,14 @@ test('the version on the page matches package.json', () => {
   const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.match(html, new RegExp(`id="version">v${version.replace(/\./g, '\\.')}<`));
 });
+
+test('the desktop window keeps its own pages, opens web links in the browser and refuses the rest', async () => {
+  const { linkAction, windowKey } = await import('../electron/links.js');
+  assert.equal(linkAction('http://127.0.0.1:8851/x', 'http://127.0.0.1:8851'), 'app');
+  assert.equal(linkAction('https://developer.android.com/', 'http://127.0.0.1:8851'), 'browser');
+  assert.equal(linkAction('file:///C:/Windows', 'http://127.0.0.1:8851'), 'deny');
+  assert.equal(linkAction('not a url', 'http://127.0.0.1:8851'), 'deny');
+  assert.equal(windowKey({ type: 'keyDown', key: 'F5' }), 'reload');
+  assert.equal(windowKey({ type: 'keyDown', key: 'I', control: true, shift: true }), 'devtools');
+  assert.equal(windowKey({ type: 'keyUp', key: 'F5' }), null);
+});

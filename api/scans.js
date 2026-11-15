@@ -1,12 +1,20 @@
 // Starting, following and browsing scans.
 
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { lstat, statfs } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
-import { findAdb, phonePath, serialParam } from '../lib/adb.js';
+import { findAdb, phonePath, serialParam, shQuote } from '../lib/adb.js';
 import { fail, idParam, ok } from '../lib/http.js';
+import { formatBytes } from '../public/format.js';
+import { pullPlan, pullToPc } from '../lib/pull.js';
+import { recycle, removeOnPhone } from '../lib/remove.js';
 import { cancelScan, forget, getScan, scanStatus, startScan } from '../lib/scans.js';
+import { startTask, taskStatus } from '../lib/tasks.js';
 import { childrenOf, crumbs, fileTypes, largestFiles } from '../lib/tree.js';
+
+/** What the routes below use to change things; tests swap in stand-ins. */
+export const deps = { recycle, removeOnPhone, findAdb, spawnAdb: spawn, statfs };
 
 /** A folder on this PC to scan, or null. "C:" becomes "C:\". */
 export function localPath(p) {
@@ -56,7 +64,17 @@ function finishedScan(params) {
 
 function dirParam(scan, v) {
   const id = idParam(v);
-  return id == null ? null : scan.tree.dirs[id] ?? null;
+  const d = id == null ? null : scan.tree.dirs[id] ?? null;
+  return d && scan.tree.alive(d) ? d : null;
+}
+
+/** The folder and (optional) file a request names, checked against the scan: [d, fileName, error]. */
+function itemParam(scan, dir, file) {
+  const d = dirParam(scan, String(dir ?? ''));
+  if (!d) return [null, null, fail(404, 'no-folder', 'No such folder in this scan.')];
+  if (file == null || file === '') return [d, null, null];
+  if (typeof file !== 'string' || !d.files.some((f) => f.name === file)) return [null, null, fail(404, 'no-file', 'No such file in this scan.')];
+  return [d, file, null];
 }
 
 /** One folder: its totals, the path down to it and its contents (depth 2 for the treemap). */
@@ -117,4 +135,121 @@ export function reveal({ params, body }) {
     spawn('explorer.exe', file ? [`/select,${path}`] : [path], { detached: true, stdio: 'ignore' }).unref();
   }
   return ok({ ok: true, path });
+}
+
+/**
+ * Deletes a file or folder the scan found: to the Recycle Bin on this PC, for
+ * good on a phone. The scan's totals are updated without scanning again.
+ */
+export async function removeItem({ params, body }) {
+  const [scan, err] = finishedScan(params);
+  if (err) return err;
+  const [d, file, bad] = itemParam(scan, body?.dir, body?.file);
+  if (bad) return bad;
+  if (!file && !d.parent) return fail(400, 'root', 'The scanned folder itself can’t be deleted here; open the folder above it instead.');
+  const path = scan.tree.pathOf(d, file ?? undefined);
+  const size = file ? d.files.find((f) => f.name === file).size : d.size;
+  const forget = () => (file ? scan.tree.removeFile(d, file) : scan.tree.removeDir(d));
+  try {
+    if (scan.source === 'local') {
+      let st;
+      try {
+        st = await lstat(path);
+      } catch {
+        forget();
+        return fail(404, 'gone', `${path} is no longer there.`);
+      }
+      if (st.isSymbolicLink() || st.isDirectory() !== !file) return fail(409, 'changed', `${path} has changed since the scan; scan again.`);
+      await deps.recycle([path]);
+    } else {
+      const adb = deps.findAdb();
+      if (!adb) return fail(400, 'no-adb', 'adb was not found.');
+      await deps.removeOnPhone({ adb, serial: scan.serial, path });
+    }
+  } catch (e) {
+    return fail(409, 'not-deleted', e.message);
+  }
+  forget();
+  return ok({ ok: true, path, size, parent: file ? d.id : d.parent.id, recycled: scan.source === 'local', scan: scanStatus(scan) });
+}
+
+/** The nearest folder of `path` that exists (for free space before a copy). */
+function existingAncestor(path) {
+  let p = path;
+  while (!existsSync(p)) {
+    const up = dirname(p);
+    if (up === p) return null;
+    p = up;
+  }
+  return p;
+}
+
+/** Copies a phone file or folder the scan found into a folder on this PC, as a background task. */
+export async function pull({ params, body }) {
+  const [scan, err] = finishedScan(params);
+  if (err) return err;
+  if (scan.source !== 'phone') return fail(400, 'not-phone', 'Only a phone’s files can be saved to this PC.');
+  const [d, file, bad] = itemParam(scan, body?.dir, body?.file);
+  if (bad) return bad;
+  const dest = localPath(body?.dest);
+  if (!dest) return fail(400, 'bad-dest', 'Give a full folder path on this PC, such as C:\\Users\\you\\Downloads.');
+  if (existsSync(dest) && !statSync(dest).isDirectory()) return fail(400, 'bad-dest', `${dest} is a file, not a folder.`);
+  const adb = deps.findAdb();
+  if (!adb) return fail(400, 'no-adb', 'adb was not found.');
+  const plan = pullPlan(scan.tree, d, file);
+  const base = existingAncestor(dest);
+  if (base) {
+    try {
+      const s = await deps.statfs(base);
+      const free = s.bavail * s.bsize;
+      if (plan.totalBytes > free) return fail(400, 'no-space', `This needs ${formatBytes(plan.totalBytes)} but ${base} has only ${formatBytes(free)} free.`);
+    } catch { /* free space unknown: try anyway */ }
+  }
+  const what = file ?? (d.parent ? d.name : scan.path);
+  const task = startTask({ kind: 'pull', label: `${what} from ${scan.label}`, dest: join(dest, plan.name), isFile: plan.isFile },
+    (t) => pullToPc({ adb, serial: scan.serial, plan, dest, task: t, spawnAdb: deps.spawnAdb }));
+  return ok(taskStatus(task), 201);
+}
+
+/**
+ * One phone file's bytes, streamed from the phone as they arrive. The page
+ * uses it for dragging a file out of the window into Explorer (Chrome's
+ * DownloadURL drag), so nothing is copied to a temporary file first.
+ */
+export function file({ params, query }) {
+  const [scan, err] = finishedScan(params);
+  if (err) return err;
+  if (scan.source !== 'phone') return fail(400, 'not-phone', 'Only a phone’s files are served.');
+  const [d, name, bad] = itemParam(scan, query.get('dir'), query.get('name') ?? '');
+  if (bad) return bad;
+  if (!name) return fail(400, 'no-file', 'Name a file.');
+  const adb = deps.findAdb();
+  if (!adb) return fail(400, 'no-adb', 'adb was not found.');
+  const { size } = d.files.find((f) => f.name === name);
+  const remote = scan.tree.pathOf(d, name);
+  return {
+    raw(res) {
+      const child = deps.spawnAdb(adb, ['-s', scan.serial, 'exec-out', `cat ${shQuote(remote)} 2>/dev/null`], { windowsHide: true });
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(size), // a short transfer then fails in the browser instead of leaving a cut-off file
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      let sent = 0;
+      child.stdout.on('data', (chunk) => {
+        if (sent + chunk.length > size) chunk = chunk.subarray(0, Math.max(0, size - sent));
+        sent += chunk.length;
+        if (chunk.length && !res.write(chunk)) {
+          child.stdout.pause();
+          res.once('drain', () => child.stdout.resume());
+        }
+      });
+      child.stderr?.resume();
+      child.on('close', () => res.end());
+      child.on('error', () => res.destroy());
+      res.on('close', () => { if (child.exitCode == null) child.kill(); });
+    },
+  };
 }

@@ -9,6 +9,8 @@ const $ = (id) => document.getElementById(id);
 const MODE_KEY = 'storage-tree:mode:v1';
 const LOCAL_PATH_KEY = 'storage-tree:local-path:v1';
 const PHONE_PATH_KEY = 'storage-tree:phone-path:v1';
+const SAVE_DEST_KEY = 'storage-tree:save-dest:v1';
+const WIFI_ADDRESS_KEY = 'storage-tree:wifi-address:v1';
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -63,6 +65,9 @@ const state = {
   storageSerial: null,
   devices: [],
   pollTimer: null,
+  info: { downloads: '', app: false },
+  tasks: [],
+  taskTimer: null,
 };
 
 /* ---------- source: this PC / phone ---------- */
@@ -130,7 +135,7 @@ async function loadDevices() {
       $('phone-summary').hidden = true;
       return;
     }
-    sel.replaceChildren(...devices.map((d) => h('option', { value: d.serial }, `${d.model || d.serial}${d.state === 'device' ? '' : ` (${d.state})`}`)));
+    sel.replaceChildren(...devices.map((d) => h('option', { value: d.serial }, deviceLabel(d))));
     if (devices.some((d) => d.serial === prev)) sel.value = prev;
     onDeviceChange();
   } catch (err) {
@@ -340,14 +345,13 @@ function renderTree() {
   const rows = [];
   const root = state.nodes.get(0);
   if (!root) return;
-  const local = state.scan.source === 'local';
   const walk = (n, depth, parentSize) => {
-    rows.push(dirRow({ kind: 'dir', id: n.id, name: n.name, size: n.size, count: n.count, mtime: n.mtime }, depth, parentSize, true));
+    rows.push(dirRow({ kind: 'dir', id: n.id, name: n.name, size: n.size, count: n.count, mtime: n.mtime, isRoot: !n.id }, depth, parentSize, true, n.path));
     if (!state.expanded.has(n.id)) return;
     for (const c of n.children) {
       if (c.kind === 'dir' && state.expanded.has(c.id) && state.nodes.has(c.id)) walk(state.nodes.get(c.id), depth + 1, n.size);
-      else if (c.kind === 'dir') rows.push(dirRow(c, depth + 1, n.size, false));
-      else if (c.kind === 'file') rows.push(fileRow(c, n, depth + 1, local));
+      else if (c.kind === 'dir') rows.push(dirRow(c, depth + 1, n.size, false, joinPath(n.path, c.name)));
+      else if (c.kind === 'file') rows.push(fileRow(c, n, depth + 1));
       else rows.push(h('div', { class: 'row tree-cols more-row' }, h('div', { class: 'name', style: `padding-left:${(depth + 1) * 16 + 24}px` }, c.name), h('div', { class: 'num' }, formatBytes(c.size)), h('div'), h('div', { class: 'files-col' }), h('div', { class: 'hide-narrow' })));
     }
   };
@@ -355,28 +359,30 @@ function renderTree() {
   box.replaceChildren(...rows);
 }
 
-function dirRow(c, depth, parentSize, loaded) {
+function dirRow(c, depth, parentSize, loaded, path) {
   const open = state.expanded.has(c.id) && loaded;
   const canOpen = !c.empty;
-  return h('div', { class: `row tree-cols dir-row${state.selected === c.id ? ' sel' : ''}`, role: 'treeitem', 'aria-expanded': canOpen ? String(open) : null, onclick: () => select(c.id), ondblclick: () => toggle(c.id) },
+  const item = dirItem(c, path);
+  return h('div', { class: `row tree-cols dir-row${state.selected === c.id ? ' sel' : ''}`, role: 'treeitem', 'aria-expanded': canOpen ? String(open) : null, onclick: () => select(c.id), ondblclick: () => toggle(c.id), oncontextmenu: (e) => openMenu(e, item) },
     h('div', { class: 'name', style: `padding-left:${depth * 16}px` },
       h('button', { type: 'button', class: `caret${canOpen ? '' : ' blank'}`, 'aria-expanded': String(open), 'aria-label': open ? 'Collapse' : 'Expand', onclick: (e) => { e.stopPropagation(); toggle(c.id); } }, caretSvg()),
       h('i', { class: 'dot', style: 'background:var(--k-dir);outline:1px solid var(--line)' }),
       h('span', { class: 'label', title: c.name }, c.name),
-      state.scan.source === 'local' ? h('span', { class: 'actions' }, h('button', { type: 'button', title: 'Show in Explorer', onclick: (e) => { e.stopPropagation(); reveal(c.id); } }, 'Open')) : null),
+      moreButton(item)),
     h('div', { class: 'num' }, formatBytes(c.size)),
     h('div', { class: 'share' }, meter(c.size, parentSize), h('span', { class: 'pct' }, formatPercent(c.size, parentSize))),
     h('div', { class: 'num muted files-col' }, formatCount(c.count)),
     h('div', { class: 'num muted hide-narrow' }, formatDate(c.mtime)));
 }
 
-function fileRow(c, parent, depth, local) {
-  return h('div', { class: 'row tree-cols file-row' },
+function fileRow(c, parent, depth) {
+  const item = fileItem(c, parent.id, joinPath(parent.path, c.name));
+  return h('div', { class: 'row tree-cols file-row', ...dragAttrs(item), oncontextmenu: (e) => openMenu(e, item) },
     h('div', { class: 'name', style: `padding-left:${depth * 16}px` },
       h('span', { class: 'caret blank' }),
       h('i', { class: 'dot', style: `background:var(--k-${kindOf(c.ext)})` }),
       h('span', { class: 'label', title: c.name }, c.name),
-      local ? h('span', { class: 'actions' }, h('button', { type: 'button', title: 'Show in Explorer', onclick: () => reveal(parent.id, c.name) }, 'Show')) : null),
+      moreButton(item)),
     h('div', { class: 'num' }, formatBytes(c.size)),
     h('div', { class: 'share' }, meter(c.size, parent.size), h('span', { class: 'pct' }, formatPercent(c.size, parent.size))),
     h('div', { class: 'num muted files-col' }),
@@ -397,15 +403,17 @@ async function renderLargest() {
   box.replaceChildren(h('p', { class: 'note' }, 'Finding the largest files…'));
   const { files } = await api(`/api/scans/${state.scan.id}/largest?under=${nid}&n=300`);
   if (state.selected !== nid) return;
-  const local = state.scan.source === 'local';
-  box.replaceChildren(...(files.length ? files.map((f) => h('div', { class: 'row file-cols file-row' },
-    h('div', { class: 'name' },
-      h('i', { class: 'dot', style: `background:var(--k-${kindOf(f.ext)})` }),
-      h('span', { class: 'label', title: f.path }, f.name),
-      h('small', { title: f.path }, f.path.slice(0, f.path.length - f.name.length)),
-      local ? h('span', { class: 'actions' }, h('button', { type: 'button', onclick: () => reveal(f.dirId, f.name) }, 'Show')) : null),
-    h('div', { class: 'num' }, formatBytes(f.size)),
-    h('div', { class: 'num muted hide-narrow' }, formatDate(f.mtime)))) : [h('p', { class: 'note' }, 'No files here.')]));
+  box.replaceChildren(...(files.length ? files.map((f) => {
+    const item = fileItem(f, f.dirId, f.path);
+    return h('div', { class: 'row file-cols file-row', ...dragAttrs(item), oncontextmenu: (e) => openMenu(e, item) },
+      h('div', { class: 'name' },
+        h('i', { class: 'dot', style: `background:var(--k-${kindOf(f.ext)})` }),
+        h('span', { class: 'label', title: f.path }, f.name),
+        h('small', { title: f.path }, f.path.slice(0, f.path.length - f.name.length)),
+        moreButton(item)),
+      h('div', { class: 'num' }, formatBytes(f.size)),
+      h('div', { class: 'num muted hide-narrow' }, formatDate(f.mtime)));
+  }) : [h('p', { class: 'note' }, 'No files here.')]));
 }
 
 async function renderTypes() {
@@ -466,6 +474,281 @@ function setTab(tab) {
   }
 }
 
+/* ---------- actions: menu, delete, save to PC, drag out ---------- */
+
+/** A path inside a scanned folder: "C:\" + "Users" -> "C:\Users", "/storage/emulated/0" + "DCIM" -> "/storage/emulated/0/DCIM". */
+function joinPath(parent, name) {
+  const sep = state.scan?.source === 'local' ? '\\' : '/';
+  return parent.endsWith(sep) ? parent + name : `${parent}${sep}${name}`;
+}
+
+const dirItem = (c, path) => ({ kind: 'dir', dirId: c.id, name: c.name, size: c.size, count: c.count, path, isRoot: c.isRoot || c.id === 0 });
+const fileItem = (c, dirId, path) => ({ kind: 'file', dirId, name: c.name, size: c.size, path });
+
+function moreButton(item) {
+  return h('span', { class: 'actions' }, h('button', { type: 'button', class: 'more', title: 'More actions', 'aria-label': `Actions for ${item.name}`, 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); openMenu(e, item); } }, '⋯'));
+}
+
+/** A name Chrome can use in a DownloadURL drag (no colons) and Windows can save. */
+const dragName = (name) => name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'file';
+
+/** Phone files can be dragged into Explorer or onto the desktop; Chrome fetches them from the phone as they drop. */
+function dragAttrs(item) {
+  if (state.scan?.source !== 'phone' || item.kind !== 'file') return {};
+  return {
+    draggable: 'true',
+    title: 'Drag into Explorer to copy it to this PC',
+    ondragstart: (e) => {
+      const url = `${location.origin}/api/scans/${state.scan.id}/file?dir=${item.dirId}&name=${encodeURIComponent(item.name)}`;
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('DownloadURL', `application/octet-stream:${dragName(item.name)}:${url}`);
+      e.dataTransfer.setData('text/plain', item.path);
+    },
+  };
+}
+
+function actionsFor(item) {
+  const local = state.scan.source === 'local';
+  const out = [];
+  if (item.kind === 'dir') out.push({ label: 'Open here', run: () => select(item.dirId) });
+  if (local) out.push({ label: 'Show in Explorer', run: () => (item.kind === 'dir' ? reveal(item.dirId) : reveal(item.dirId, item.name)) });
+  else out.push({ label: 'Save to PC…', run: () => openSave(item) });
+  if (!item.isRoot) out.push({ label: local ? 'Move to Recycle Bin…' : 'Delete from phone…', danger: true, run: () => confirmDelete(item) });
+  return out;
+}
+
+let menuFor = null;
+
+function openMenu(ev, item) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (!state.scan?.root) return;
+  const menu = $('menu');
+  menuFor = ev.currentTarget instanceof HTMLElement ? ev.currentTarget : null;
+  menu.replaceChildren(
+    h('div', { class: 'menu-title', title: item.path }, item.name),
+    ...actionsFor(item).map((a) => h('button', { type: 'button', role: 'menuitem', class: a.danger ? 'danger-item' : null, onclick: () => { closeMenu(); a.run(); } }, a.label)));
+  menu.hidden = false;
+  const x = ev.clientX || ev.currentTarget?.getBoundingClientRect?.().left || 0;
+  const y = ev.clientY || ev.currentTarget?.getBoundingClientRect?.().bottom || 0;
+  menu.style.left = `${Math.max(4, Math.min(x, innerWidth - menu.offsetWidth - 4))}px`;
+  menu.style.top = `${Math.max(4, y + menu.offsetHeight > innerHeight ? y - menu.offsetHeight : y)}px`;
+  menu.querySelector('button')?.focus();
+}
+
+function closeMenu() {
+  if ($('menu').hidden) return;
+  $('menu').hidden = true;
+  menuFor?.focus?.();
+  menuFor = null;
+}
+
+function onMenuKey(e) {
+  const items = [...$('menu').querySelectorAll('button')];
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'Escape') closeMenu();
+  else if (e.key === 'ArrowDown') items[(i + 1) % items.length]?.focus();
+  else if (e.key === 'ArrowUp') items[(i - 1 + items.length) % items.length]?.focus();
+  else return;
+  e.preventDefault();
+}
+
+let toastTimer = null;
+function toast(text, failed = false) {
+  const t = $('toast');
+  t.textContent = text;
+  t.className = `toast${failed ? ' failed' : ''}`;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, failed ? 9000 : 5000);
+}
+
+const whatText = (item) => (item.kind === 'dir'
+  ? `${formatBytes(item.size)} in ${formatCount(item.count)} ${item.count === 1 ? 'file' : 'files'}`
+  : formatBytes(item.size));
+
+/** Asks before deleting; the dialog says whether it can be undone. */
+function confirmDelete(item) {
+  const local = state.scan.source === 'local';
+  const dlg = $('delete-dialog');
+  $('delete-title').textContent = local ? `Move this ${item.kind === 'dir' ? 'folder' : 'file'} to the Recycle Bin?` : `Delete this ${item.kind === 'dir' ? 'folder' : 'file'} from the phone?`;
+  $('delete-path').textContent = item.path;
+  $('delete-what').textContent = whatText(item);
+  $('delete-warn').textContent = local
+    ? 'You can restore it from the Recycle Bin. Windows asks first if it is too big for the bin.'
+    : `A phone has no Recycle Bin: this can’t be undone.${item.kind === 'dir' ? ' Everything in the folder is deleted.' : ''}`;
+  $('delete-warn').className = local ? 'muted' : 'warn';
+  $('delete-ok').textContent = local ? 'Move to Recycle Bin' : 'Delete for good';
+  $('delete-ok').disabled = false;
+  $('delete-error').hidden = true;
+  dlg.returnValue = '';
+  dlg.onclose = null;
+  dlg.querySelector('form').onsubmit = async (e) => {
+    if (e.submitter?.value !== 'ok') return;
+    e.preventDefault();
+    $('delete-ok').disabled = true;
+    $('delete-ok').textContent = local ? 'Moving…' : 'Deleting…';
+    try {
+      const r = await api(`/api/scans/${state.scan.id}/delete`, { method: 'POST', body: JSON.stringify(item.kind === 'dir' ? { dir: item.dirId } : { dir: item.dirId, file: item.name }) });
+      dlg.close();
+      await afterDelete(item, r);
+      toast(`${r.recycled ? 'Moved to the Recycle Bin' : 'Deleted'}: ${item.name} (${formatBytes(r.size)} freed${r.recycled ? ' once the bin is emptied' : ''})`);
+    } catch (err) {
+      $('delete-error').textContent = err.message;
+      $('delete-error').hidden = false;
+      $('delete-ok').disabled = false;
+      $('delete-ok').textContent = local ? 'Move to Recycle Bin' : 'Delete for good';
+      if (err.code === 'gone') { dlg.close(); await afterDelete(item, null); toast(err.message, true); }
+    }
+  };
+  dlg.showModal();
+}
+
+/** The scan's totals changed: reload what is shown, opening the folder above when the open one was deleted. */
+async function afterDelete(item, r) {
+  if (r?.scan) state.scan = r.scan;
+  else state.scan = await api(`/api/scans/${state.scan.id}`);
+  const lost = item.kind === 'dir' ? item.dirId : null;
+  const openIds = state.nodes.get(state.selected)?.crumbs.map((c) => c.id) ?? [state.selected];
+  state.nodes.clear();
+  if (lost != null) state.expanded.delete(lost);
+  renderStatus();
+  const target = lost != null && openIds.includes(lost) ? (r?.parent ?? 0) : state.selected;
+  try {
+    await select(target);
+  } catch {
+    await select(r?.parent ?? 0);
+  }
+  if (state.storage && state.scan.source === 'phone') onDeviceChange();
+}
+
+function openSave(item) {
+  const dlg = $('save-dialog');
+  $('save-path').textContent = item.path;
+  $('save-what').textContent = whatText(item);
+  const dest = $('save-dest');
+  dest.value = store.get(SAVE_DEST_KEY) || state.info.downloads || '';
+  const name = item.kind === 'dir' && item.isRoot ? item.path.split('/').filter(Boolean).pop() ?? 'phone' : item.name;
+  const note = () => {
+    const d = dest.value.trim().replace(/[\\/]+$/, '');
+    $('save-note').textContent = d ? `${item.kind === 'dir' ? 'Saved as the folder' : 'Saved as'} ${d}\\${dragName(name)}. Files already there with the same size are skipped; other files of the same name are kept and the new one saved as “name (2)”.` : '';
+  };
+  dest.oninput = note;
+  note();
+  $('save-error').hidden = true;
+  $('save-ok').disabled = false;
+  dlg.querySelector('form').onsubmit = async (e) => {
+    if (e.submitter?.value !== 'ok') return;
+    e.preventDefault();
+    $('save-ok').disabled = true;
+    try {
+      const task = await api(`/api/scans/${state.scan.id}/pull`, { method: 'POST', body: JSON.stringify({ ...(item.kind === 'dir' ? { dir: item.dirId } : { dir: item.dirId, file: item.name }), dest: dest.value.trim() }) });
+      store.set(SAVE_DEST_KEY, dest.value.trim());
+      dlg.close();
+      state.tasks = [task, ...state.tasks.filter((t) => t.id !== task.id)];
+      renderTasks();
+      pollTasks();
+    } catch (err) {
+      $('save-error').textContent = err.message;
+      $('save-error').hidden = false;
+      $('save-ok').disabled = false;
+    }
+  };
+  dlg.showModal();
+  dest.focus();
+}
+
+/* ---------- copies to this PC ---------- */
+
+async function pollTasks() {
+  clearTimeout(state.taskTimer);
+  try {
+    state.tasks = (await api('/api/tasks')).tasks;
+  } catch { /* the server went away; try again */ }
+  renderTasks();
+  if (state.tasks.some((t) => t.state === 'running')) state.taskTimer = setTimeout(pollTasks, 700);
+}
+
+function taskLine(t) {
+  const parts = [`${formatBytes(t.bytes)} of ${formatBytes(t.totalBytes)}`];
+  if (t.totalFiles > 1) parts.push(`${formatCount(t.files)} of ${formatCount(t.totalFiles)} files`);
+  if (t.skipped) parts.push(`${formatCount(t.skipped)} already there`);
+  if (t.state === 'running' && t.seconds > 2 && t.bytes > 0) parts.push(`${formatBytes(t.bytes / t.seconds)}/s`);
+  if (t.state !== 'running') parts.push(formatSeconds(t.seconds));
+  return parts.join(' · ');
+}
+
+const TASK_STATE = { running: 'Copying', done: 'Copied', 'done-errors': 'Copied with problems', failed: 'Copy failed', cancelled: 'Cancelled' };
+
+function renderTasks() {
+  const box = $('tasks');
+  box.hidden = !state.tasks.length;
+  const finished = state.tasks.filter((t) => t.state !== 'running');
+  const clear = finished.length > 1
+    ? h('div', { class: 'tasks-head' }, h('button', { type: 'button', class: 'link', onclick: () => Promise.all(finished.map((t) => api(`/api/tasks/${t.id}`, { method: 'DELETE' }).catch(() => {}))).then(pollTasks) }, `Clear ${finished.length} finished`))
+    : null;
+  box.replaceChildren(...(clear ? [clear] : []), ...state.tasks.map((t) => h('div', { class: `task ${t.state}` },
+    h('div', { class: 'task-head' },
+      h('b', {}, TASK_STATE[t.state] ?? t.state), h('span', { class: 'task-label', title: t.dest ?? '' }, t.label),
+      h('span', { class: 'task-buttons' },
+        t.state === 'running' ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/cancel`, { method: 'POST' }).then(pollTasks) }, 'Cancel') : null,
+        t.state === 'done' || t.state === 'done-errors' ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/reveal`, { method: 'POST' }).catch((err) => toast(err.message, true)) }, 'Show in Explorer') : null,
+        t.state !== 'running' ? h('button', { type: 'button', class: 'ghost', 'aria-label': 'Remove from the list', title: 'Remove from the list', onclick: () => api(`/api/tasks/${t.id}`, { method: 'DELETE' }).then(pollTasks) }, '✕') : null)),
+    meter(t.bytes, t.totalBytes || 1, t.state === 'failed'),
+    h('div', { class: 'task-line muted' }, taskLine(t), t.state === 'running' && t.current ? h('span', { class: 'task-current', title: t.current }, ` · ${t.current.split('/').pop()}`) : null),
+    t.error ? h('div', { class: 'task-error' }, t.error) : null,
+    t.errorCount ? h('details', {}, h('summary', {}, `${formatCount(t.errorCount)} ${t.errorCount === 1 ? 'file' : 'files'} not copied`),
+      h('ul', {}, t.errors.map((e) => h('li', {}, `${e.path} — ${e.message}`)))) : null)));
+}
+
+/* ---------- phones over Wi-Fi ---------- */
+
+function openWifi() {
+  const saved = store.get(WIFI_ADDRESS_KEY) ?? '';
+  if (saved && !$('connect-address').value) $('connect-address').value = saved;
+  $('wifi-result').hidden = true;
+  renderWifiConnected();
+  $('wifi-dialog').showModal();
+}
+
+function wifiResult(text, failed) {
+  const p = $('wifi-result');
+  p.textContent = text;
+  p.className = `wifi-result${failed ? ' failed' : ''}`;
+  p.hidden = false;
+}
+
+async function wifiCall(btn, path, body, busy) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busy;
+  try {
+    const r = await api(path, { method: 'POST', body: JSON.stringify(body) });
+    wifiResult(r.message ?? 'Done.', false);
+    await loadDevices();
+    renderWifiConnected();
+    return r;
+  } catch (err) {
+    wifiResult(err.message, true);
+    return null;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function renderWifiConnected() {
+  const wifi = state.devices.flatMap((d) => d.wifiSerials.map((s) => ({ serial: s, name: d.model || d.serial })));
+  $('wifi-connected').replaceChildren(...(wifi.length ? [h('p', { class: 'muted' }, 'Connected over Wi-Fi:'), ...wifi.map((w) => h('div', { class: 'wifi-row' },
+    h('span', {}, h('b', {}, w.name), ` ${w.serial}`),
+    h('button', { type: 'button', class: 'ghost', onclick: (e) => wifiCall(e.currentTarget, '/api/wireless/disconnect', { serial: w.serial }, 'Disconnecting…') }, 'Disconnect')))] : []));
+}
+
+function deviceLabel(d) {
+  const how = d.transports?.length > 1 ? 'USB + Wi-Fi' : d.transport === 'wifi' ? 'Wi-Fi' : 'USB';
+  return `${d.model || d.serial} · ${how}${d.state === 'device' ? '' : ` (${d.state})`}`;
+}
+
 /* ---------- treemap ---------- */
 
 let mapBoxes = [];
@@ -508,7 +791,7 @@ function drawMap() {
     ctx.fillText(t, x, y);
   };
 
-  const leaf = (c, r, depth) => {
+  const leaf = (c, r, depth, parentId) => {
     const color = c.kind === 'file' ? colors[kindOf(c.ext)] : c.kind === 'dir' ? colors.dir : colors.other;
     ctx.fillStyle = color;
     ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -517,10 +800,10 @@ function drawMap() {
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, Math.max(0, r.w - 1), Math.max(0, r.h - 1));
     if (r.w > 40 && r.h > 18) label(c.name, r.x + 4, r.y + 3, r.w - 8, c.kind === 'dir' ? dirText : textColor);
     if (r.w > 50 && r.h > 34) label(formatBytes(c.size), r.x + 4, r.y + 17, r.w - 8, c.kind === 'dir' ? dirText : textColor);
-    mapBoxes.push({ c, r, depth });
+    mapBoxes.push({ c, r, depth, parentId });
   };
 
-  const layout = (items, rect, depth) => {
+  const layout = (items, rect, depth, parentId) => {
     for (const { item: c, x, y, w: bw, h: bh } of squarify(items, rect)) {
       const r = { x, y, w: bw, h: bh };
       if (c.kind === 'dir' && c.children?.length && bw > 46 && bh > 40 && depth < 3) {
@@ -530,14 +813,14 @@ function drawMap() {
         ctx.lineWidth = 2;
         ctx.strokeRect(x + 1, y + 1, bw - 2, bh - 2);
         label(`${c.name}  ${formatBytes(c.size)}`, x + 5, y + 4, bw - 10, dirText);
-        mapBoxes.push({ c, r, depth });
-        layout(c.children, { x: x + 3, y: y + 19, w: bw - 6, h: bh - 22 }, depth + 1);
+        mapBoxes.push({ c, r, depth, parentId });
+        layout(c.children, { x: x + 3, y: y + 19, w: bw - 6, h: bh - 22 }, depth + 1, c.id);
       } else {
-        leaf(c, r, depth);
+        leaf(c, r, depth, parentId);
       }
     }
   };
-  layout(n.children, { x: 0, y: 0, w, h: hgt }, 0);
+  layout(n.children, { x: 0, y: 0, w, h: hgt }, 0, n.id);
 }
 
 function boxAt(ev) {
@@ -578,6 +861,28 @@ function onMapClick(ev) {
   if (c.kind === 'dir') select(c.id);
 }
 
+/** Right-click on the treemap: the same menu as the lists, for the box under the pointer. */
+function onMapMenu(ev) {
+  const found = boxAt(ev);
+  if (!found) return;
+  const { c, parentId } = found.hit;
+  if (c.kind !== 'dir' && c.kind !== 'file') return;
+  const parentPath = mapPathOf(parentId);
+  openMenu(ev, c.kind === 'dir' ? dirItem(c, joinPath(parentPath, c.name)) : fileItem(c, parentId, joinPath(parentPath, c.name)));
+}
+
+/** The path of a folder shown in the treemap (the selected one or a folder inside it, up to two levels down). */
+function mapPathOf(id) {
+  const n = state.nodes.get(state.selected);
+  if (!n) return '';
+  if (id === n.id) return n.path;
+  for (const c of n.children) {
+    if (c.id === id) return joinPath(n.path, c.name);
+    for (const g of c.children ?? []) if (g.id === id) return joinPath(joinPath(n.path, c.name), g.name);
+  }
+  return state.nodes.get(id)?.path ?? '';
+}
+
 function renderLegend() {
   $('legend').replaceChildren(...['image', 'video', 'audio', 'document', 'archive', 'app', 'data', 'other'].map((k) => h('span', {}, h('i', { class: 'dot', style: `background:var(--k-${k})` }), KIND_NAMES[k])),
     h('span', {}, h('i', { class: 'dot', style: 'background:var(--k-dir);outline:1px solid var(--line)' }), 'Folder'));
@@ -586,7 +891,7 @@ function renderLegend() {
 /* ---------- start ---------- */
 
 function init() {
-  api('/api/version').then(({ version }) => { $('version').textContent = `v${version}`; }).catch(() => {});
+  api('/api/version').then((v) => { $('version').textContent = `v${v.version}`; state.info = v; }).catch(() => {});
   $('mode-local').addEventListener('click', () => setMode('local'));
   $('mode-phone').addEventListener('click', () => setMode('phone'));
   $('local-form').addEventListener('submit', (e) => { e.preventDefault(); scanLocal(); });
@@ -597,6 +902,32 @@ function init() {
   $('map').addEventListener('mousemove', onMapMove);
   $('map').addEventListener('mouseleave', () => { $('tip').hidden = true; });
   $('map').addEventListener('click', onMapClick);
+  $('map').addEventListener('contextmenu', onMapMenu);
+  $('open-wifi').addEventListener('click', openWifi);
+  $('pair-btn').addEventListener('click', async (e) => {
+    const r = await wifiCall(e.currentTarget, '/api/wireless/pair', { address: $('pair-address').value, code: $('pair-code').value }, 'Pairing…');
+    if (r) $('pair-code').value = '';
+    if (r?.connected) {
+      store.set(WIFI_ADDRESS_KEY, r.connected);
+      $('connect-address').value = r.connected;
+    }
+  });
+  $('connect-btn').addEventListener('click', async (e) => {
+    const address = $('connect-address').value.trim();
+    if (await wifiCall(e.currentTarget, '/api/wireless/connect', { address }, 'Connecting…')) store.set(WIFI_ADDRESS_KEY, address);
+  });
+  $('menu').addEventListener('keydown', onMenuKey);
+  document.addEventListener('pointerdown', (e) => { if (!$('menu').contains(e.target)) closeMenu(); });
+  document.addEventListener('scroll', closeMenu, true);
+  window.addEventListener('blur', closeMenu);
+  window.addEventListener('resize', closeMenu);
+  // Delete key on the open folder (not the scanned one itself).
+  $('tree').addEventListener('keydown', (e) => {
+    if (e.key !== 'Delete' || !state.scan?.root || !state.selected) return;
+    const n = state.nodes.get(state.selected);
+    if (n) confirmDelete(dirItem({ id: n.id, name: n.name, size: n.size, count: n.count }, n.path));
+  });
+  pollTasks();
   new ResizeObserver(() => drawMap()).observe($('map-wrap'));
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawMap);
   $('local-path').value = store.get(LOCAL_PATH_KEY) ?? '';

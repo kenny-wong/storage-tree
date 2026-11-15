@@ -13,11 +13,11 @@
     <div class="brand">
       <img src="icon.svg" alt="" width="26" height="26">
       <h1>Storage Tree</h1>
-      <span class="version" id="version">v1.0.0</span>
+      <span class="version" id="version">v1.1.0</span>
     </div>
     <div class="modes" role="tablist" aria-label="What to scan">
       <button type="button" role="tab" id="mode-local" aria-selected="true">This PC</button>
-      <button type="button" role="tab" id="mode-phone" aria-selected="false">Phone (USB)</button>
+      <button type="button" role="tab" id="mode-phone" aria-selected="false">Phone</button>
     </div>
   </header>
 
@@ -35,6 +35,7 @@
         <select id="device"></select>
       </label>
       <button type="button" id="refresh-devices" class="ghost">Refresh</button>
+      <button type="button" id="open-wifi" class="ghost">Wi-Fi…</button>
       <form class="scan-form" id="phone-form">
         <input id="phone-path" type="text" value="/storage/emulated/0" autocomplete="off" spellcheck="false" aria-label="Folder on the phone">
         <button type="submit" class="primary">Scan phone</button>
@@ -45,6 +46,7 @@
   </section>
 
   <section class="status" id="status" hidden></section>
+  <section class="tasks" id="tasks" hidden aria-label="Copies to this PC"></section>
 
   <main id="results" hidden>
     <div class="toolbar">
@@ -60,7 +62,7 @@
       <section class="pane list-pane">
         <div class="view" id="view-tree">
           <div class="grid-head tree-cols"><span>Name</span><span class="num">Size</span><span>Share</span><span class="num files-col">Files</span><span class="num hide-narrow">Modified</span></div>
-          <div class="rows" id="tree" role="tree"></div>
+          <div class="rows" id="tree" role="tree" tabindex="0" aria-label="Folders (Delete key deletes the open folder)"></div>
         </div>
         <div class="view" id="view-largest" hidden>
           <div class="grid-head file-cols"><span>File</span><span class="num">Size</span><span class="num hide-narrow">Modified</span></div>
@@ -86,5 +88,67 @@
       </section>
     </div>
   </main>
+
+  <div class="menu" id="menu" role="menu" hidden></div>
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <dialog id="delete-dialog" class="dialog">
+    <form method="dialog">
+      <h2 id="delete-title"></h2>
+      <p class="path" id="delete-path"></p>
+      <p id="delete-what"></p>
+      <p class="warn" id="delete-warn"></p>
+      <p class="dialog-error" id="delete-error" hidden></p>
+      <div class="dialog-buttons">
+        <button type="submit" value="cancel" class="ghost" autofocus>Cancel</button>
+        <button type="submit" value="ok" class="danger" id="delete-ok"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="save-dialog" class="dialog">
+    <form method="dialog" id="save-form">
+      <h2>Save to this PC</h2>
+      <p class="path" id="save-path"></p>
+      <p id="save-what"></p>
+      <label class="stack-field">Into the folder
+        <input id="save-dest" type="text" autocomplete="off" spellcheck="false" required>
+      </label>
+      <p class="muted small" id="save-note"></p>
+      <p class="dialog-error" id="save-error" hidden></p>
+      <div class="dialog-buttons">
+        <button type="submit" value="cancel" class="ghost" formnovalidate>Cancel</button>
+        <button type="submit" value="ok" class="primary" id="save-ok">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="wifi-dialog" class="dialog wide">
+    <form method="dialog">
+      <h2>Phone over Wi-Fi</h2>
+      <p class="muted">The phone and this PC must be on the same Wi-Fi. Android 11 or later.</p>
+      <ol class="steps">
+        <li>On the phone: Settings → System → Developer options → turn on <b>Wireless debugging</b> and tap it.</li>
+        <li>The first time only: tap <b>Pair device with pairing code</b> and type what it shows here:
+          <div class="inline-form">
+            <input id="pair-address" type="text" placeholder="IP address &amp; port, e.g. 192.168.1.23:41235" autocomplete="off" spellcheck="false" aria-label="Pairing IP address and port">
+            <input id="pair-code" type="text" inputmode="numeric" maxlength="7" placeholder="6-digit code" autocomplete="off" aria-label="Pairing code">
+            <button type="button" class="primary" id="pair-btn">Pair</button>
+          </div>
+        </li>
+        <li>After that: type the <b>IP address &amp; port</b> shown at the top of Wireless debugging (a different port from pairing):
+          <div class="inline-form">
+            <input id="connect-address" type="text" placeholder="e.g. 192.168.1.23:37155" autocomplete="off" spellcheck="false" aria-label="IP address and port">
+            <button type="button" class="primary" id="connect-btn">Connect</button>
+          </div>
+        </li>
+      </ol>
+      <p class="wifi-result" id="wifi-result" hidden></p>
+      <div id="wifi-connected"></div>
+      <div class="dialog-buttons">
+        <button type="submit" value="close" class="ghost">Close</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
