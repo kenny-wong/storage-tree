@@ -62,6 +62,12 @@ function finishedScan(params) {
   return [scan, null];
 }
 
+/** A scan to read from, finished or still running (folder totals are live). */
+function readableScan(params) {
+  const scan = scanParam(params);
+  return scan ? [scan, null] : [null, fail(404, 'no-scan', 'That scan is gone; scan again.')];
+}
+
 function dirParam(scan, v) {
   const id = idParam(v);
   const d = id == null ? null : scan.tree.dirs[id] ?? null;
@@ -79,7 +85,7 @@ function itemParam(scan, dir, file) {
 
 /** One folder: its totals, the path down to it and its contents (depth 2 for the treemap). */
 export function node({ params, query }) {
-  const [scan, err] = finishedScan(params);
+  const [scan, err] = readableScan(params);
   if (err) return err;
   const d = dirParam(scan, params.nid);
   if (!d) return fail(404, 'no-folder', 'No such folder in this scan.');
@@ -116,7 +122,7 @@ export function readProtected({ params }) {
 }
 
 export function largest({ params, query }) {
-  const [scan, err] = finishedScan(params);
+  const [scan, err] = readableScan(params);
   if (err) return err;
   const d = dirParam(scan, query.get('under') ?? '0') ?? scan.tree.root;
   const n = Math.min(2000, Math.max(1, Number(query.get('n')) || 200));
@@ -124,7 +130,7 @@ export function largest({ params, query }) {
 }
 
 export function types({ params, query }) {
-  const [scan, err] = finishedScan(params);
+  const [scan, err] = readableScan(params);
   if (err) return err;
   const d = dirParam(scan, query.get('under') ?? '0') ?? scan.tree.root;
   return ok({ under: d.id, size: d.size, types: fileTypes(scan.tree, d) });
@@ -140,7 +146,7 @@ export function remove({ params }) {
 
 /** Shows a scanned folder (or a file in it) in Windows Explorer. This PC's scans only. */
 export function reveal({ params, body }) {
-  const [scan, err] = finishedScan(params);
+  const [scan, err] = readableScan(params);
   if (err) return err;
   if (scan.source !== 'local') return fail(400, 'not-local', 'Only folders on this PC can be shown in Explorer.');
   const d = dirParam(scan, String(body?.dir ?? ''));

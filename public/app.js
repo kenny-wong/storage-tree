@@ -282,13 +282,55 @@ async function poll() {
     renderStatus();
     if (s.state === 'scanning') {
       state.pollTimer = setTimeout(poll, 400);
+      if (s.entries) liveRefresh(id);
     } else if (s.root) {
-      await showResults();
+      // Load the open folders again with their final totals, so they stay open.
+      state.nodes = (await freshNodes(id)) ?? new Map();
+      if (state.scan?.id !== id) return;
+      await showResults(state.nodes.has(state.selected) ? state.selected : 0);
       // "Include protected folders": read them as administrator straight away.
       if (s.source === 'local' && s.state === 'done' && s.protectedCount && !s.admin && $('auto-admin').checked && state.scan?.id === id) readProtected(id);
     }
   } catch (err) {
     showStatusError(err.message);
+  }
+}
+
+// While a scan runs the results are drawn from what has been found so far,
+// and drawn again about once a second (folders kept open, nothing scrolled).
+let liveBusy = false;
+let liveAt = 0;
+
+/** The root, the open folder and every expanded folder, loaded again. */
+async function freshNodes(id) {
+  const ids = [...new Set([0, state.selected, ...state.expanded].filter((n) => n === 0 || n === state.selected || state.nodes.has(n)))];
+  const got = await Promise.all(ids.map((n) => api(`/api/scans/${id}/nodes/${n}?depth=3`).catch(() => null)));
+  const nodes = new Map();
+  ids.forEach((n, i) => { if (got[i]) nodes.set(n, got[i]); });
+  return nodes.has(0) ? nodes : null;
+}
+
+async function liveRefresh(id) {
+  if (liveBusy || Date.now() - liveAt < 1000) return;
+  liveBusy = true;
+  liveAt = Date.now();
+  try {
+    const nodes = await freshNodes(id);
+    if (!nodes || state.scan?.id !== id || state.scan.state !== 'scanning') return; // finished meanwhile: the final load draws it
+    if (!nodes.has(state.selected)) state.selected = 0;
+    const n = nodes.get(state.selected);
+    if (!n) return;
+    state.nodes = nodes;
+    $('results').hidden = false;
+    $('tab-apps').hidden = state.scan.source !== 'phone';
+    renderCrumbs(n);
+    renderAbout(n);
+    renderTree();
+    drawMap();
+    if (state.tab === 'largest') renderLargest(true);
+    if (state.tab === 'types') renderTypes();
+  } finally {
+    liveBusy = false;
   }
 }
 
@@ -307,7 +349,7 @@ function renderStatus() {
   const where = s.source === 'phone' ? `${s.label}: ${s.path}` : s.path;
   const parts = [];
   if (s.state === 'scanning') {
-    parts.push(h('i', { class: 'spin', 'aria-hidden': 'true' }), h('span', {}, `Scanning ${where} — ${formatCount(s.entries)} items, ${formatSeconds(s.seconds)}`),
+    parts.push(h('i', { class: 'spin', 'aria-hidden': 'true' }), h('span', {}, `Scanning ${where} — `, h('b', {}, formatBytes(s.root?.size ?? 0)), ` so far in ${formatCount(s.entries)} items, ${formatSeconds(s.seconds)}`),
       h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/scans/${s.id}/cancel`, { method: 'POST' }) }, 'Stop'));
   } else if (s.state === 'failed') {
     parts.push(h('span', {}, `Scan of ${where} failed: ${s.error}`));
@@ -381,8 +423,9 @@ async function pollAdmin(id) {
       state.pollTimer = setTimeout(() => pollAdmin(id), 800);
       return;
     }
-    state.nodes = new Map(); // the tree changed: load it again
-    await showResults(state.selected);
+    state.nodes = (await freshNodes(id)) ?? new Map(); // the tree changed: load the open folders again
+    if (state.scan?.id !== id) return;
+    await showResults(state.nodes.has(state.selected) ? state.selected : 0);
     renderStatus();
   } catch (err) {
     showStatusError(err.message);
@@ -588,10 +631,10 @@ async function reveal(dir, file) {
   }
 }
 
-async function renderLargest() {
+async function renderLargest(quiet = false) {
   const box = $('largest');
   const nid = state.selected;
-  box.replaceChildren(h('p', { class: 'note' }, 'Finding the largest files…'));
+  if (!quiet) box.replaceChildren(h('p', { class: 'note' }, 'Finding the largest files…'));
   const { files } = await api(`/api/scans/${state.scan.id}/largest?under=${nid}&n=300`);
   if (state.selected !== nid) return;
   box.replaceChildren(...(files.length ? files.map((f) => {
@@ -685,7 +728,7 @@ const dragName = (name) => name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'file'
 
 /** Phone files can be dragged into Explorer or onto the desktop; Chrome fetches them from the phone as they drop. */
 function dragAttrs(item) {
-  if (state.scan?.source !== 'phone' || item.kind !== 'file') return {};
+  if (state.scan?.source !== 'phone' || state.scan.state === 'scanning' || item.kind !== 'file') return {};
   return {
     draggable: 'true',
     title: 'Drag into Explorer to copy it to this PC',
@@ -700,11 +743,13 @@ function dragAttrs(item) {
 
 function actionsFor(item) {
   const local = state.scan.source === 'local';
+  const scanning = state.scan.state === 'scanning'; // deleting or copying waits until the scan is finished
   const out = [];
   if (item.kind === 'dir') out.push({ label: 'Open here', run: () => select(item.dirId) });
   if (local) out.push({ label: 'Show in Explorer', run: () => (item.kind === 'dir' ? reveal(item.dirId) : reveal(item.dirId, item.name)) });
-  else out.push({ label: 'Save to PC…', run: () => openSave(item) });
-  if (!item.isRoot) out.push({ label: local ? 'Move to Recycle Bin…' : 'Delete from phone…', danger: true, run: () => confirmDelete(item) });
+  else if (!scanning) out.push({ label: 'Save to PC…', run: () => openSave(item) });
+  if (scanning) out.push({ label: local ? 'Delete: after the scan' : 'Save and delete: after the scan', disabled: true, run: () => {} });
+  else if (!item.isRoot) out.push({ label: local ? 'Move to Recycle Bin…' : 'Delete from phone…', danger: true, run: () => confirmDelete(item) });
   return out;
 }
 
@@ -718,7 +763,7 @@ function openMenu(ev, item) {
   menuFor = ev.currentTarget instanceof HTMLElement ? ev.currentTarget : null;
   menu.replaceChildren(
     h('div', { class: 'menu-title', title: item.path }, item.name),
-    ...actionsFor(item).map((a) => h('button', { type: 'button', role: 'menuitem', class: a.danger ? 'danger-item' : null, onclick: () => { closeMenu(); a.run(); } }, a.label)));
+    ...actionsFor(item).map((a) => h('button', { type: 'button', role: 'menuitem', class: a.danger ? 'danger-item' : null, disabled: a.disabled ?? false, onclick: () => { closeMenu(); a.run(); } }, a.label)));
   menu.hidden = false;
   const x = ev.clientX || ev.currentTarget?.getBoundingClientRect?.().left || 0;
   const y = ev.clientY || ev.currentTarget?.getBoundingClientRect?.().bottom || 0;
@@ -1154,7 +1199,7 @@ function init() {
   window.addEventListener('resize', closeMenu);
   // Delete key on the open folder (not the scanned one itself).
   $('tree').addEventListener('keydown', (e) => {
-    if (e.key !== 'Delete' || !state.scan?.root || !state.selected) return;
+    if (e.key !== 'Delete' || !state.scan?.root || state.scan.state === 'scanning' || !state.selected) return;
     const n = state.nodes.get(state.selected);
     if (n) confirmDelete(dirItem({ id: n.id, name: n.name, size: n.size, count: n.count }, n.path));
   });

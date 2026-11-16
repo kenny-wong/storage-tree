@@ -134,3 +134,17 @@ test('finish() run again after a delete does not count the deleted folder', asyn
   assert.equal(t.root.size, 5);
   assert.equal(t.root.dirCount, 1);
 });
+
+test('folder totals are live while entries come in, and finish() agrees', async () => {
+  const { createTree: mk } = await import('../lib/tree.js');
+  const t = mk('/r');
+  t.addFile(['a', 'b', 'x'], 10, 5);
+  assert.deepEqual([t.root.size, t.root.count, t.root.dirCount, t.root.mtime], [10, 1, 2, 5]);
+  t.addDir(['c']);
+  t.addFile(['a', 'y'], 4, 9);
+  const a = t.root.sub.get('a');
+  assert.deepEqual([a.size, a.count, a.dirCount, a.mtime], [14, 2, 1, 9]);
+  const live = t.dirs.map((d) => [d.size, d.count, d.dirCount, d.mtime]);
+  t.finish();
+  assert.deepEqual(t.dirs.map((d) => [d.size, d.count, d.dirCount, d.mtime]), live);
+});

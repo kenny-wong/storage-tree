@@ -132,3 +132,23 @@ test('sizeProtected keeps the folders listed when permission is refused', async 
   assert.equal(st.errorCount, 1);
   assert.equal(st.protectedCount, 1);
 });
+
+test('a running scan can be read: status has live totals and the folder routes answer', async () => {
+  const { node } = await import('../api/scans.js');
+  let release;
+  const scan = startScan({ source: 'local', path: 'C:\\', sep: '\\' }, {
+    scanLocal: async ({ tree }) => { tree.addDir([]); tree.addFile(['Users', 'a.bin'], 50); await new Promise((r) => { release = r; }); },
+    listLockedFiles: async () => [],
+  });
+  await tick();
+  const st = scanStatus(scan);
+  assert.equal(st.state, 'scanning');
+  assert.equal(st.finished, false);
+  assert.equal(st.root.size, 50);
+  const r = node({ params: { id: String(scan.id), nid: '0' }, query: new URLSearchParams('depth=2') });
+  const body = r.body ?? r;
+  assert.equal(JSON.stringify(body).includes('"Users"'), true);
+  release();
+  await tick();
+  assert.equal(scanStatus(scan).state, 'done');
+});

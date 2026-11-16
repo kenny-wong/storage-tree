@@ -2,6 +2,7 @@
 
 See what fills a disk, on this PC or on an Android phone connected by USB or Wi-Fi, and clear it out.
 
+- **Live while scanning**: folders, the treemap, largest files and file types fill in as the scan finds things (refreshed about once a second, open folders kept open), with the size found so far in the status line. Deleting and copying wait until the scan is finished.
 - **Folders**: a tree sorted by size, with each folder's share of its parent, file count and last change.
 - **Treemap**: boxes sized by space, nested three levels and coloured by kind of file (pictures, videos, apps, …). Click a folder to open it. Files too small to draw one by one share a striped box, coloured by what most of them are; click it to open their folder.
 - **Phone folders explained**: well-known folders (DCIM, Download, Android/data, Android/media, WhatsApp media, thumbnails, …) carry a tag saying what they hold, coloured by whether they are your files, an app's files or safe to clear; the open folder is described above the list, and a Phone folders guide lists the usual layout with this phone's sizes and what lives outside shared storage.
