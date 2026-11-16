@@ -342,18 +342,19 @@ function adminLine(s) {
   const n = (k) => `${formatCount(k)} protected ${k === 1 ? 'folder' : 'folders'}`;
   if (a?.state === 'running') {
     return h('div', { class: 'admin' }, h('i', { class: 'spin', 'aria-hidden': 'true' }),
-      `Reading ${n(a.folders)} as administrator… Windows asks first: if no prompt shows, look for a flashing shield on the taskbar.`);
+      h('span', {}, `Reading ${n(a.folders)} as administrator… Windows asks first: if no prompt shows, look for a flashing shield on the taskbar.`));
   }
   const ask = s.protectedCount
     ? h('button', { type: 'button', class: 'ghost', onclick: () => readProtected(s.id), title: 'Windows asks for administrator permission, then the folders are listed with robocopy in backup mode. Nothing is changed.' }, 'Read them as administrator…')
     : null;
-  if (a?.state === 'failed') return h('div', { class: 'admin failed' }, a.message, ' ', ask);
+  // One span per sentence: the line is a flex row, and loose text nodes would each become a separate item.
+  if (a?.state === 'failed') return h('div', { class: 'admin failed' }, h('span', {}, a.message), ask);
   if (a?.state === 'done') {
     const left = s.protectedCount ? `; ${n(s.protectedCount)} still could not be read` : '';
-    return h('div', { class: 'admin' }, `Read ${n(a.read)} as administrator: `, h('b', {}, `+${formatBytes(a.bytes)}`), `${left}. They are marked “protected”: this account can’t change them.`);
+    return h('div', { class: 'admin' }, h('span', {}, `Read ${n(a.read)} as administrator: `, h('b', {}, `+${formatBytes(a.bytes)}`), `${left}. They are tagged “protected”: you can look inside, but Windows won’t let this app delete there.`));
   }
   if (!s.protectedCount) return null;
-  return h('div', { class: 'admin' }, `${n(s.protectedCount)}${s.protectedSample?.length ? ` (such as ${s.protectedSample.join(' and ')})` : ''} can only be opened by an administrator, so their size isn’t counted. `, ask);
+  return h('div', { class: 'admin' }, h('span', {}, `${n(s.protectedCount)}${s.protectedSample?.length ? ` (such as ${s.protectedSample.join(' and ')})` : ''} can only be opened by an administrator, so their size isn’t counted.`), ask);
 }
 
 async function readProtected(id) {
