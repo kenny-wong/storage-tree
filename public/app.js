@@ -13,6 +13,7 @@ const LOCAL_PATH_KEY = 'storage-tree:local-path:v1';
 const PHONE_PATH_KEY = 'storage-tree:phone-path:v1';
 const SAVE_DEST_KEY = 'storage-tree:save-dest:v1';
 const WIFI_ADDRESS_KEY = 'storage-tree:wifi-address:v1';
+const AUTO_ADMIN_KEY = 'storage-tree:auto-admin:v1'; // '1' or '0'; on unless turned off
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -283,6 +284,8 @@ async function poll() {
       state.pollTimer = setTimeout(poll, 400);
     } else if (s.root) {
       await showResults();
+      // "Include protected folders": read them as administrator straight away.
+      if (s.source === 'local' && s.state === 'done' && s.protectedCount && !s.admin && $('auto-admin').checked && state.scan?.id === id) readProtected(id);
     }
   } catch (err) {
     showStatusError(err.message);
@@ -1121,6 +1124,8 @@ function init() {
   $('mode-local').addEventListener('click', () => setMode('local'));
   $('mode-phone').addEventListener('click', () => setMode('phone'));
   $('local-form').addEventListener('submit', (e) => { e.preventDefault(); scanLocal(); });
+  $('auto-admin').checked = store.get(AUTO_ADMIN_KEY) !== '0';
+  $('auto-admin').addEventListener('change', (e) => store.set(AUTO_ADMIN_KEY, e.target.checked ? '1' : '0'));
   $('phone-form').addEventListener('submit', (e) => { e.preventDefault(); scanPhone(); });
   $('refresh-devices').addEventListener('click', loadDevices);
   $('device').addEventListener('change', onDeviceChange);

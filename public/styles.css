@@ -134,7 +134,10 @@ button { cursor: pointer; }
 .meter.full > i { background: var(--k-video); }
 
 .scan-form { display: flex; gap: 8px; flex: 1; min-width: 260px; }
-.scan-form input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.scan-form .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+.scan-form .check input { flex: none; margin: 0; }
+@media (max-width: 560px) { .scan-form:has(.check) { flex-wrap: wrap; } .scan-form .check { flex-basis: 100%; } }
+.scan-form input:not([type=checkbox]) { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .primary { border: 0; background: var(--accent); color: var(--accent-text); padding: 7px 16px; border-radius: 8px; font-weight: 600; }
 .primary:disabled { opacity: 0.5; cursor: default; }
 .ghost { border: 1px solid var(--line); background: transparent; padding: 6px 12px; border-radius: 8px; }
