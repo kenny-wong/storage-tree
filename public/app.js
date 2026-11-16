@@ -74,7 +74,31 @@ const state = {
 
 /* ---------- source: this PC / phone ---------- */
 
+// Each source tab keeps the last scan shown on it, so switching tabs shows that tab's own result.
+const views = { local: null, phone: null };
+
+function switchView(from, to) {
+  views[from] = state.scan ? { scan: state.scan, nodes: state.nodes, expanded: state.expanded, selected: state.selected } : null;
+  clearTimeout(state.pollTimer);
+  const v = views[to];
+  state.scan = v?.scan ?? null;
+  state.nodes = v?.nodes ?? new Map();
+  state.expanded = v?.expanded ?? new Set([0]);
+  state.selected = v?.selected ?? 0;
+  $('results').hidden = true;
+  $('folder-about').hidden = true;
+  if (!state.scan) {
+    $('status').hidden = true;
+    $('crumbs').replaceChildren();
+    return;
+  }
+  renderStatus();
+  if (state.scan.state === 'scanning') poll(); // it kept running on the server while the other tab was open
+  else if (state.scan.root) showResults(state.selected).catch((err) => showStatusError(err.message));
+}
+
 function setMode(mode) {
+  if (mode !== state.mode) switchView(state.mode, mode);
   state.mode = mode;
   store.set(MODE_KEY, mode);
   $('mode-local').setAttribute('aria-selected', String(mode === 'local'));
@@ -292,11 +316,20 @@ function renderStatus() {
     const gap = phoneGapLine(s);
     if (gap) parts.push(gap);
   }
+  // The box is rebuilt on every poll, so the list's open state and scroll position are carried over.
+  const oldList = box.querySelector('details.errors ul');
+  const scrollTop = oldList ? oldList.scrollTop : 0;
   if (s.errorCount) {
-    parts.push(h('details', {}, h('summary', {}, `${formatCount(s.errorCount)} ${s.errorCount === 1 ? 'place' : 'places'} could not be read${s.source === 'phone' ? ' (Android keeps some folders private to their apps)' : ''}`),
+    parts.push(h('details', {
+      class: 'errors',
+      open: state.errorsOpenFor === s.id,
+      ontoggle: (e) => { state.errorsOpenFor = e.currentTarget.open ? s.id : null; },
+    }, h('summary', {}, `${formatCount(s.errorCount)} ${s.errorCount === 1 ? 'place' : 'places'} could not be read${s.source === 'phone' ? ' (Android keeps some folders private to their apps)' : ''}`),
       h('ul', {}, s.errors.map((e) => h('li', {}, `${e.path} — ${e.code}`)))));
   }
   box.replaceChildren(...parts);
+  const newList = box.querySelector('details.errors ul');
+  if (newList && scrollTop) newList.scrollTop = scrollTop;
 }
 
 /** "Not in this scan: …" under a finished scan of a phone's whole shared storage, or null. */
@@ -320,28 +353,31 @@ function phoneGapLine(s) {
 /* ---------- results ---------- */
 
 async function fetchNode(nid) {
-  if (state.nodes.has(nid)) return state.nodes.get(nid);
+  const nodes = state.nodes; // the tab's own cache, even if the tab changes while this loads
+  if (nodes.has(nid)) return nodes.get(nid);
   const n = await api(`/api/scans/${state.scan.id}/nodes/${nid}?depth=3`);
-  state.nodes.set(nid, n);
+  nodes.set(nid, n);
   return n;
 }
 
-async function showResults() {
+async function showResults(nid = 0) {
   $('results').hidden = false;
   $('tab-apps').hidden = state.scan.source !== 'phone';
-  if (state.tab === 'apps' && state.scan.source !== 'phone') state.tab = 'tree';
-  await select(0);
+  if (state.tab === 'apps' && state.scan.source !== 'phone') setTab('tree');
+  await select(nid);
   if (state.scan.source === 'phone') renderStatus(); // the root node is loaded now, for the "Not in this scan" line
 }
 
 async function select(nid) {
   state.selected = nid;
+  const scanId = state.scan?.id;
+  const expanded = state.expanded;
   const n = await fetchNode(nid);
   for (const c of n.crumbs.slice(0, -1)) {
     await fetchNode(c.id);
-    state.expanded.add(c.id);
+    expanded.add(c.id);
   }
-  if (state.selected !== nid) return;
+  if (state.selected !== nid || state.scan?.id !== scanId) return;
   renderCrumbs(n);
   renderAbout(n);
   renderTree();

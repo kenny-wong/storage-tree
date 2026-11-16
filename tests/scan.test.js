@@ -8,7 +8,7 @@ import { join, sep } from 'node:path';
 import { createTree } from '../lib/tree.js';
 import { scanLocal } from '../lib/scan-local.js';
 import { LIST_END, scanPhone } from '../lib/scan-phone.js';
-import { getScan, scanStatus, startScan } from '../lib/scans.js';
+import { getScan, scanStatus, startScan, toForget } from '../lib/scans.js';
 
 /** A stand-in for `adb shell …` that prints the given output and exits. */
 function fakeSpawn(stdout, stderr = '', code = 0) {
@@ -150,4 +150,11 @@ test('startScan marks a failed scan with its message', async () => {
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(scanStatus(scan).state, 'failed');
   assert.equal(scanStatus(scan).error, 'no phone');
+});
+
+test('toForget keeps the newest few scans and the newest of each source', () => {
+  const list = [{ id: 1, source: 'local' }, { id: 2, source: 'phone' }, { id: 3, source: 'phone' }, { id: 4, source: 'phone' }, { id: 5, source: 'phone' }];
+  assert.deepEqual(toForget(list, 3), [2]); // 1 is the only PC scan, so it stays
+  assert.deepEqual(toForget([...list, { id: 6, source: 'local' }], 3), [1, 2, 3]);
+  assert.deepEqual(toForget(list.slice(0, 2), 3), []);
 });
