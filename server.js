@@ -38,6 +38,7 @@ const ROUTES = [
   ['GET', '/api/scans/:id/types', scans.types],
   ['POST', '/api/scans/:id/reveal', scans.reveal],
   ['POST', '/api/scans/:id/delete', scans.removeItem],
+  ['POST', '/api/scans/:id/protected', scans.readProtected],
   ['POST', '/api/scans/:id/pull', scans.pull],
   ['GET', '/api/scans/:id/file', scans.file],
   ['GET', '/api/tasks', tasks.list],

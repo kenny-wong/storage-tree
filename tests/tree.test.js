@@ -122,3 +122,15 @@ test('crumbs runs from the root to the folder', () => {
   const cam = t.root.sub.get('DCIM').sub.get('Camera');
   assert.deepEqual(crumbs(cam).map((c) => c.name), ['/storage/emulated/0', 'DCIM', 'Camera']);
 });
+
+test('finish() run again after a delete does not count the deleted folder', async () => {
+  const { createTree: mk } = await import('../lib/tree.js');
+  const t = mk('/r');
+  t.addFile(['a', 'x'], 10);
+  t.addFile(['b', 'y'], 5);
+  t.finish();
+  t.removeDir(t.root.sub.get('a'));
+  t.finish();
+  assert.equal(t.root.size, 5);
+  assert.equal(t.root.dirCount, 1);
+});

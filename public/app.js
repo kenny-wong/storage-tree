@@ -1,7 +1,7 @@
 // The page: choose this PC or a phone, scan, then browse the folder tree,
 // treemap, largest files, file types and (phones) apps.
 
-import { formatBytes, formatCount, formatDate, formatPercent, formatSeconds } from './format.js';
+import { errorReason, formatBytes, formatCount, formatDate, formatPercent, formatSeconds } from './format.js';
 import { KIND_NAMES, kindOf } from './kinds.js';
 import { appDirsSize, isWholeShared, notScanned, phoneUsed } from './phone-gap.js';
 import { describePhoneFolder, findIn, GUIDE, KINDS } from './phone-folders.js';
@@ -95,6 +95,7 @@ function switchView(from, to) {
   renderStatus();
   if (state.scan.state === 'scanning') poll(); // it kept running on the server while the other tab was open
   else if (state.scan.root) showResults(state.selected).catch((err) => showStatusError(err.message));
+  if (state.scan.admin?.state === 'running') pollAdmin(state.scan.id);
 }
 
 function setMode(mode) {
@@ -315,6 +316,8 @@ function renderStatus() {
     h('button', { type: 'button', class: 'ghost', onclick: () => startScan(s.source === 'phone' ? { source: 'phone', serial: s.serial, path: s.path, label: s.label } : { source: 'local', path: s.path }) }, 'Scan again'));
     const gap = phoneGapLine(s);
     if (gap) parts.push(gap);
+    const admin = adminLine(s);
+    if (admin) parts.push(admin);
   }
   // The box is rebuilt on every poll, so the list's open state and scroll position are carried over.
   const oldList = box.querySelector('details.errors ul');
@@ -325,11 +328,61 @@ function renderStatus() {
       open: state.errorsOpenFor === s.id,
       ontoggle: (e) => { state.errorsOpenFor = e.currentTarget.open ? s.id : null; },
     }, h('summary', {}, `${formatCount(s.errorCount)} ${s.errorCount === 1 ? 'place' : 'places'} could not be read${s.source === 'phone' ? ' (Android keeps some folders private to their apps)' : ''}`),
-      h('ul', {}, s.errors.map((e) => h('li', {}, `${e.path} — ${e.code}`)))));
+      h('ul', {}, s.errors.map((e) => h('li', { title: e.code }, `${e.path} — ${errorReason(e.code)}`)))));
   }
   box.replaceChildren(...parts);
   const newList = box.querySelector('details.errors ul');
   if (newList && scrollTop) newList.scrollTop = scrollTop;
+}
+
+/** The protected-folders line of a PC scan: a button to read them as administrator, progress, or the outcome. */
+function adminLine(s) {
+  if (s.source !== 'local') return null;
+  const a = s.admin;
+  const n = (k) => `${formatCount(k)} protected ${k === 1 ? 'folder' : 'folders'}`;
+  if (a?.state === 'running') {
+    return h('div', { class: 'admin' }, h('i', { class: 'spin', 'aria-hidden': 'true' }),
+      `Reading ${n(a.folders)} as administrator… Windows asks first: if no prompt shows, look for a flashing shield on the taskbar.`);
+  }
+  const ask = s.protectedCount
+    ? h('button', { type: 'button', class: 'ghost', onclick: () => readProtected(s.id), title: 'Windows asks for administrator permission, then the folders are listed with robocopy in backup mode. Nothing is changed.' }, 'Read them as administrator…')
+    : null;
+  if (a?.state === 'failed') return h('div', { class: 'admin failed' }, a.message, ' ', ask);
+  if (a?.state === 'done') {
+    const left = s.protectedCount ? `; ${n(s.protectedCount)} still could not be read` : '';
+    return h('div', { class: 'admin' }, `Read ${n(a.read)} as administrator: `, h('b', {}, `+${formatBytes(a.bytes)}`), `${left}. They are marked “protected”: this account can’t change them.`);
+  }
+  if (!s.protectedCount) return null;
+  return h('div', { class: 'admin' }, `${n(s.protectedCount)}${s.protectedSample?.length ? ` (such as ${s.protectedSample.join(' and ')})` : ''} can only be opened by an administrator, so their size isn’t counted. `, ask);
+}
+
+async function readProtected(id) {
+  try {
+    state.scan = await api(`/api/scans/${id}/protected`, { method: 'POST' });
+    renderStatus();
+    pollAdmin(id);
+  } catch (err) {
+    showStatusError(err.message);
+  }
+}
+
+async function pollAdmin(id) {
+  if (state.scan?.id !== id) return;
+  try {
+    const s = await api(`/api/scans/${id}`);
+    if (state.scan?.id !== id) return;
+    state.scan = s;
+    if (s.admin?.state === 'running') {
+      renderStatus();
+      state.pollTimer = setTimeout(() => pollAdmin(id), 800);
+      return;
+    }
+    state.nodes = new Map(); // the tree changed: load it again
+    await showResults(state.selected);
+    renderStatus();
+  } catch (err) {
+    showStatusError(err.message);
+  }
 }
 
 /** "Not in this scan: …" under a finished scan of a phone's whole shared storage, or null. */
@@ -501,6 +554,7 @@ function dirRow(c, depth, parentSize, loaded, path) {
       h('i', { class: 'dot', style: 'background:var(--k-dir);outline:1px solid var(--line)' }),
       h('span', { class: 'label', title: c.name }, c.name),
       info ? tagEl(info) : null,
+      c.locked ? h('small', { class: 'ftag locked', title: 'Read as administrator: Windows doesn’t let this account change it' }, 'protected') : null,
       moreButton(item)),
     h('div', { class: 'num' }, formatBytes(c.size)),
     h('div', { class: 'share' }, meter(c.size, parentSize), h('span', { class: 'pct' }, formatPercent(c.size, parentSize))),

@@ -9,12 +9,12 @@ import { fail, idParam, ok } from '../lib/http.js';
 import { formatBytes } from '../public/format.js';
 import { pullPlan, pullToPc } from '../lib/pull.js';
 import { recycle, removeOnPhone } from '../lib/remove.js';
-import { cancelScan, forget, getScan, scanStatus, startScan } from '../lib/scans.js';
+import { cancelScan, forget, getScan, protectedFolders, scanStatus, sizeProtected, startScan } from '../lib/scans.js';
 import { startTask, taskStatus } from '../lib/tasks.js';
 import { childrenOf, crumbs, fileTypes, largestFiles } from '../lib/tree.js';
 
 /** What the routes below use to change things; tests swap in stand-ins. */
-export const deps = { recycle, removeOnPhone, findAdb, spawnAdb: spawn, statfs };
+export const deps = { recycle, removeOnPhone, findAdb, spawnAdb: spawn, statfs, listAsAdmin: undefined };
 
 /** A folder on this PC to scan, or null. "C:" becomes "C:\". */
 export function localPath(p) {
@@ -95,7 +95,24 @@ export function node({ params, query }) {
     mtime: d.mtime,
     crumbs: crumbs(d),
     children: childrenOf(d, { limit, depth }),
+    ...(insideLocked(d) ? { locked: true } : {}),
   });
+}
+
+const insideLocked = (d) => {
+  for (let n = d; n; n = n.parent) if (n.locked) return true;
+  return false;
+};
+
+/** Reads the folders this account may not open, as administrator (Windows asks first). This PC's scans only. */
+export function readProtected({ params }) {
+  const [scan, err] = finishedScan(params);
+  if (err) return err;
+  if (scan.source !== 'local') return fail(400, 'not-local', 'Only scans of this PC have protected folders.');
+  if (scan.admin?.state === 'running') return fail(409, 'running', 'Already reading the protected folders.');
+  if (!protectedFolders(scan).length) return fail(400, 'none', 'This scan has no protected folders left to read.');
+  sizeProtected(scan, deps.listAsAdmin);
+  return ok(scanStatus(scan), 202);
 }
 
 export function largest({ params, query }) {

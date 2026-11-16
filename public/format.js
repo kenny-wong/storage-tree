@@ -37,3 +37,16 @@ export function formatSeconds(s) {
   const m = Math.floor(s / 60);
   return `${m} min ${Math.round(s - m * 60)} s`;
 }
+
+/** Why a place could not be read, in plain words, from a Node or phone error code. */
+export function errorReason(code) {
+  return {
+    EPERM: 'no permission (Windows keeps it private)',
+    EACCES: 'no permission (Windows keeps it private)',
+    EBUSY: 'in use by Windows',
+    ENOENT: 'gone before it could be read',
+    'Permission denied': 'no permission (private to an app)',
+    'Operation not permitted': 'no permission (private to an app)',
+    'No such file or directory': 'gone before it could be read',
+  }[code] ?? code;
+}

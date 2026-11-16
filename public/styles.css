@@ -164,6 +164,9 @@ button { cursor: pointer; }
 .status details { flex-basis: 100%; color: var(--muted); font-size: 13px; }
 .status .incomplete { flex-basis: 100%; }
 .status .gap { flex-basis: 100%; color: var(--muted); font-size: 13px; }
+.status .admin { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; color: var(--muted); }
+.status .admin b { color: var(--text); }
+.status .admin.failed { color: var(--err-text); }
 .status details ul { margin: 6px 0; padding-left: 18px; max-height: 160px; overflow: auto; }
 
 main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 16px 16px; gap: 10px; }
@@ -353,6 +356,7 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1
 .row .name small.ftag.app { color: var(--tag-app-text); }
 .row .name small.ftag.clear { color: var(--tag-clear-text); }
 .row .name small.ftag.info { color: var(--tag-info-text); }
+.ftag.locked, .row .name small.ftag.locked { background: var(--tag-info-bg); color: var(--tag-info-text); }
 .folder-about { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; line-height: 1.45; font-size: 13px; }
 .folder-about .hint { color: var(--muted); }
 .folder-about .link { margin-left: auto; }
