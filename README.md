@@ -85,7 +85,7 @@ Choose **Browse phone** at the top right. No scan is needed: folders open one at
 - **Look:** **Large**, **Medium**, **List** or **Details** (dates, sizes, dimensions, video lengths). Sort by any of them, show only pictures or videos, or type part of a name.
 - **Select:** Ctrl and Shift clicks, or Ctrl+A. Right-click for **Save to PC…** and **Delete from phone…**. One file can be dragged into Explorer.
 
-A folder of 10,000 photos takes the phone a few seconds to list the first time; after that it shows at once and is checked in the background. Previews already seen are kept on this PC (up to 600 MB). Opened copies are deleted after two days, unless you changed them. To delete it all yourself, remove `%LOCALAPPDATA%\Storage Tree\browse`.
+A folder of 10,000 photos takes the phone a few seconds to list the first time. After that it shows at once, also after the app was closed, and is checked for changes in the background. Previews already seen are kept on this PC (up to 600 MB), so a folder seen before needs nothing from the phone to show them. Opened copies are deleted after two days, unless you changed them. To delete it all yourself, remove `%LOCALAPPDATA%\Storage Tree\browse`.
 
 ## Phones
 

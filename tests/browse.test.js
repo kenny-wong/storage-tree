@@ -453,3 +453,77 @@ test('path, lengths, counts and kinds in words', () => {
   assert.deepEqual([typeName(E('A.JPG')), typeName(E('x', { dir: true })), typeName(E('noext'))], ['JPG picture', 'Folder', 'File']);
   assert.deepEqual([canView('a.heic'), canOpen('a.heic'), canOpen('a.bat'), canOpen('a.html'), canOpen('a.svg'), canOpen('a.docm')], [false, true, false, false, false, false]);
 });
+
+/* ---------- 1.8.1: lists and small previews kept on this PC ---------- */
+
+test('folder lists are kept on this PC, checked when read back, and tidied', async (t) => {
+  const { readList, saveList, tidyLists } = await import('../lib/browse-store.js');
+  const root = temp(t);
+  assert.equal(await readList('S1', DIR, root), null);
+  const entries = [E('a.jpg', { size: 5 }), E('sub', { dir: true, size: 0 })];
+  await saveList('S1', DIR, { hw: 'HW1', entries, media: [['a.jpg', { id: '7', video: false, w: 4, h: 3, ms: 0 }]] }, root);
+  const back = await readList('S1', DIR, root);
+  assert.deepEqual([back.hw, back.entries, back.media], ['HW1', entries, [['a.jpg', { id: '7', video: false, w: 4, h: 3, ms: 0 }]]]);
+  assert.ok(back.saved > 0);
+  assert.equal(await readList('S2', DIR, root), null); // another phone (or the same one over Wi-Fi)
+  assert.equal(await readList('S1', `${DIR}/sub`, root), null);
+  await saveList('S1', '/x', { hw: 'HW1', entries: [E('ok'), { name: '../evil', dir: false, size: 1, mtime: 1 }, { name: 5 }, E('', {})] }, root);
+  assert.deepEqual((await readList('S1', '/x', root)).entries.map((e) => e.name), ['ok']);
+  for (let i = 0; i < 4; i++) await saveList('S1', `/f${i}`, { hw: 'h', entries: [] }, root);
+  assert.equal(await tidyLists(root, 3), 3);
+});
+
+test('a kept list shows at once; copying, opening and deleting wait for the phone’s own list', async (t) => {
+  process.env.STORAGE_TREE_BROWSE_DIR = temp(t);
+  t.after(() => { delete process.env.STORAGE_TREE_BROWSE_DIR; });
+  let phone = 0;
+  const run = async (_adb, args) => {
+    phone++;
+    if (args.at(-1).startsWith('content query')) return { code: 0, stdout: `Row: 0 _id=7, media_type=1, width=40, height=30, duration=NULL, _data=${DIR}/a.jpg\n`, stderr: '' };
+    return { code: 0, stdout: listing(line('a.jpg'), line('b.jpg')), stderr: '' };
+  };
+  withDeps(t, { run, removeManyOnPhone: async () => assert.fail('a kept list must not delete') });
+  assert.deepEqual((await browse.list({ body: { serial: 'S1', path: DIR, saved: true } })).body, { saved: null });
+  const fresh = await browse.list({ body: { serial: 'S1', path: DIR } });
+  await browse.media({ params: { id: String(fresh.body.id) } });
+  await new Promise((ok) => setTimeout(ok, 80)); // saved in the background
+  phone = 0;
+  const kept = await browse.list({ body: { serial: 'S1', path: '/sdcard/Pics', saved: true } });
+  assert.equal(phone, 0);
+  assert.deepEqual([kept.body.entries.map((e) => e.name), kept.body.media], [['a.jpg', 'b.jpg'], { 'a.jpg': [40, 30, 0] }]);
+  const params = { id: String(kept.body.id) };
+  assert.deepEqual((await browse.media({ params })).body.media, { 'a.jpg': [40, 30, 0] });
+  for (const route of [browse.remove, browse.pull, browse.measure]) assert.equal((await route({ params, body: { names: ['a.jpg'], dest: 'C:\\x' } })).body.error, 'stale');
+  assert.equal((await browse.open({ params, body: { name: 'a.jpg' } })).body.error, 'stale');
+  assert.equal(phone, 0);
+});
+
+test('a preview the page made small is kept, so the picture isn’t read whole again', async (t) => {
+  process.env.STORAGE_TREE_BROWSE_DIR = temp(t);
+  t.after(() => { delete process.env.STORAGE_TREE_BROWSE_DIR; });
+  const png = Buffer.alloc(400, 9);
+  let reads = 0;
+  withDeps(t, {
+    run: async (_adb, args) => ({ code: 0, stdout: args.at(-1).startsWith('content') ? '' : listing(line('s.png', { size: png.length }), line('n.txt')), stderr: '' }),
+    adbBytes: async (_a, _s, command) => { reads++; return command.includes('s.png') ? heads([[`${DIR}/s.png`, png]], 1e7) : Buffer.alloc(0); },
+  });
+  const { body } = await browse.list({ body: { serial: 'S1', path: DIR } });
+  const params = { id: String(body.id) };
+  const ask = async () => {
+    const res = fakeRes();
+    await browse.thumbs({ params, body: { names: ['s.png'] } }).raw(res);
+    const b = res.body();
+    return unpackPreviews(b.buffer.slice(b.byteOffset, b.byteOffset + b.length));
+  };
+  assert.equal((await ask())[0].whole, true);
+  const bad = (o) => browse.keep({ params, body: { name: 's.png', ...o } }).then((r) => r.status);
+  assert.equal(await bad({ data: Buffer.from('not a jpeg, just text that is long enough to pass the size check ..........................................').toString('base64') }), 400);
+  assert.equal(await bad({ data: 'x' }), 400);
+  assert.equal(await bad({ data: Buffer.alloc(600 * 1024, 0xff).toString('base64') }), 400);
+  assert.equal((await browse.keep({ params, body: { name: 'n.txt', data: JPEG.toString('base64') } })).status, 400);
+  assert.equal((await browse.keep({ params, body: { name: 'gone.png', data: JPEG.toString('base64') } })).status, 404);
+  assert.equal(await bad({ data: JPEG.toString('base64') }), 200);
+  reads = 0;
+  const again = await ask();
+  assert.deepEqual([reads, again[0].whole, Buffer.from(again[0].bytes).equals(JPEG)], [0, false, true]);
+});

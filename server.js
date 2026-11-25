@@ -46,6 +46,7 @@ const ROUTES = [
   ['POST', '/api/browse', browse.list],
   ['GET', '/api/browse/:id/media', browse.media],
   ['POST', '/api/browse/:id/thumbs', browse.thumbs],
+  ['POST', '/api/browse/:id/keep', browse.keep],
   ['GET', '/api/browse/:id/file', browse.file],
   ['POST', '/api/browse/:id/open', browse.open],
   ['POST', '/api/browse/:id/measure', browse.measure],

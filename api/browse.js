@@ -7,8 +7,8 @@ import { statfs } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { findAdb, phonePath, runAdb, serialParam, shQuote } from '../lib/adb.js';
-import { canonical, childPath, getListing, listFolder, mediaOf, parsePlaces, pick, placesCommand, planOf } from '../lib/browse.js';
-import { browseDir, openedPlace, readThumb, tidyOpened, tidyThumbs, writeThumb } from '../lib/browse-store.js';
+import { canonical, childPath, getListing, keepListing, listFolder, mediaOf, parsePlaces, pick, placesCommand, planOf } from '../lib/browse.js';
+import { browseDir, openedPlace, readList, readThumb, saveList, tidyLists, tidyOpened, tidyThumbs, writeThumb } from '../lib/browse-store.js';
 import { fail, idParam, ok } from '../lib/http.js';
 import { adbBytes, IMAGE_TYPES, mediaKind, packPreviews, previews } from '../lib/preview.js';
 import { pullToPc, safeName } from '../lib/pull.js';
@@ -23,6 +23,7 @@ import { existingAncestor, localPath } from './scans.js';
 export const deps = { findAdb, run: runAdb, spawnAdb: spawn, adbBytes, statfs, removeManyOnPhone, openFile };
 
 const MAX_BATCH = 64;
+const MAX_KEPT = 512 * 1024; // a preview the page made small
 let tidied = false;
 
 /** Opens a file in its usual Windows program. The path goes through the environment, so nothing in a name is read as a command. */
@@ -56,10 +57,19 @@ export async function list({ body }) {
   if (!adb) return noAdb();
   if (!tidied) {
     tidied = true;
-    Promise.all([tidyThumbs(), tidyOpened()]).catch(() => {});
+    Promise.all([tidyThumbs(), tidyOpened(), tidyLists()]).catch(() => {});
+  }
+  const path = canonical(given);
+  // `saved`: the list kept on this PC, at once, without asking the phone (null when there is none).
+  if (body.saved) {
+    const s = await readList(serial, path);
+    if (!s) return ok({ saved: null });
+    const l = keepListing({ adb, serial, hw: s.hw, path, entries: new Map(s.entries.map((e) => [e.name, e])), media: s.media && new Map(s.media), stale: true });
+    return ok({ id: l.id, path, entries: s.entries, saved: s.saved, media: s.media ? mediaBody(l, new Map(s.media)) : null });
   }
   try {
-    const l = await listFolder({ adb, serial, path: canonical(given), run: deps.run });
+    const l = await listFolder({ adb, serial, path, run: deps.run });
+    saveList(serial, path, { hw: l.hw, entries: [...l.entries.values()] });
     return ok({ id: l.id, path: l.path, entries: [...l.entries.values()] }, 201);
   } catch (err) {
     return fail(409, 'not-listed', err.message);
@@ -72,19 +82,43 @@ function listingParam(params) {
   return l ? [l, null] : [null, fail(404, 'no-listing', 'This folder’s list is out of date; reload it.')];
 }
 
-function itemsParam(params, names) {
+function itemsParam(params, names, { fresh = false } = {}) {
   const [l, err] = listingParam(params);
   if (err) return [null, null, err];
+  if (fresh && l.stale) return [null, null, fail(409, 'stale', 'Still checking this folder on the phone; try again in a moment.')];
   const items = pick(l, names);
   return items ? [l, items, null] : [null, null, fail(404, 'no-item', 'That isn’t in this folder’s list; reload it.')];
+}
+
+/** The page's form of Android's index: { name: [width, height, ms] }. */
+const mediaBody = (_l, index) => Object.fromEntries([...index].map(([name, m]) => [name, [m.w, m.h, m.ms]]));
+
+/** Android's index of the listing's folder, asked once; a fresh answer is saved with the folder's list. */
+function mediaFor(l) {
+  const asked = !l.media;
+  const p = mediaOf(l, deps.run);
+  if (asked && !l.stale) {
+    p.then((index) => saveList(l.serial, l.path, { hw: l.hw, entries: [...l.entries.values()], media: [...index] })).catch(() => {});
+  }
+  return p;
 }
 
 /** Dimensions and lengths of the folder's photos and videos, from Android's index. */
 export async function media({ params }) {
   const [l, err] = listingParam(params);
   if (err) return err;
-  const index = await mediaOf(l, deps.run);
-  return ok({ media: Object.fromEntries([...index].map(([name, m]) => [name, [m.w, m.h, m.ms]])) });
+  return ok({ media: mediaBody(l, await mediaFor(l)) });
+}
+
+/** Keeps a preview the page made small from a whole picture, so it isn't read whole again. */
+export async function keep({ params, body }) {
+  const [l, items, err] = itemsParam(params, [body?.name]);
+  if (err) return err;
+  const [e] = items;
+  const data = typeof body?.data === 'string' && body.data.length < MAX_KEPT * 1.4 ? Buffer.from(body.data, 'base64') : null;
+  if (e.dir || !mediaKind(e.name) || !data || data.length < 100 || data.length > MAX_KEPT || data.readUInt16BE(0) !== 0xffd8) return fail(400, 'bad-preview', 'That isn’t a small JPEG preview.');
+  await writeThumb(l.hw, childPath(l.path, e.name), e, data);
+  return ok({ kept: true });
 }
 
 /** Previews of up to 64 items in one answer (packPreviews), from this PC's store or the phone. Stops when the page goes elsewhere. */
@@ -108,7 +142,7 @@ export function thumbs({ params, body }) {
       if (wanted.length && !stop.signal.aborted) {
         const got = await previews(wanted, {
           exec: (command) => (stop.signal.aborted ? Promise.resolve(Buffer.alloc(0)) : deps.adbBytes(l.adb, l.serial, command, { signal: stop.signal })),
-          media: () => mediaOf(l, deps.run),
+          media: () => mediaFor(l),
         });
         for (const [name, p] of got) {
           out.set(name, p);
@@ -160,7 +194,7 @@ export function file({ params, query }) {
 
 /** Copies a file to this PC and opens it in its usual Windows program. Only kinds that can't run anything. */
 export async function open({ params, body }) {
-  const [l, items, err] = itemsParam(params, [body?.name]);
+  const [l, items, err] = itemsParam(params, [body?.name], { fresh: true });
   if (err) return err;
   const [e] = items;
   if (e.dir || !canOpen(e.name)) return fail(400, 'not-openable', 'This kind of file isn’t opened from here; save it to the PC instead.');
@@ -198,7 +232,7 @@ async function noSpace(bytes, dest) {
 
 /** How much the named items hold (folders are read on the phone), for the Save and Delete dialogs. */
 export async function measure({ params, body }) {
-  const [l, items, err] = itemsParam(params, body?.names);
+  const [l, items, err] = itemsParam(params, body?.names, { fresh: true });
   if (err) return err;
   try {
     const plan = await planOf(l, items, deps);
@@ -210,7 +244,7 @@ export async function measure({ params, body }) {
 
 /** Copies the named items into a folder on this PC, as a background task. */
 export async function pull({ params, body }) {
-  const [l, items, err] = itemsParam(params, body?.names);
+  const [l, items, err] = itemsParam(params, body?.names, { fresh: true });
   if (err) return err;
   const dest = localPath(body?.dest);
   if (!dest) return fail(400, 'bad-dest', 'Give a full folder path on this PC, such as C:\\Users\\you\\Downloads.');
@@ -234,12 +268,13 @@ export async function pull({ params, body }) {
 
 /** Deletes the named items on the phone for good. What is really gone leaves the listing, also when some could not be deleted. */
 export async function remove({ params, body }) {
-  const [l, items, err] = itemsParam(params, body?.names);
+  const [l, items, err] = itemsParam(params, body?.names, { fresh: true });
   if (err) return err;
   const paths = new Map(items.map((e) => [childPath(l.path, e.name), e]));
   const { left, error } = await deps.removeManyOnPhone({ adb: l.adb, serial: l.serial, paths: [...paths.keys()] });
   const kept = new Set(left);
   const deleted = [...paths].filter(([p]) => !kept.has(p)).map(([, e]) => e.name);
   for (const n of deleted) l.entries.delete(n);
+  if (deleted.length) saveList(l.serial, l.path, { hw: l.hw, entries: [...l.entries.values()] });
   return ok({ deleted, left: left.length, error });
 }

@@ -121,6 +121,9 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     }
     renderPath();
     busy('Reading…');
+    if (!folder) await showSaved(serial, to, mine, focus);
+    if (mine !== turn) return;
+    if (folder?.stale) busy('Checking for changes…');
     try {
       const got = await api('/api/browse', { method: 'POST', body: JSON.stringify({ serial, path: to }) });
       if (mine !== turn) return;
@@ -145,11 +148,27 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     } catch (err) {
       if (mine !== turn) return;
       busy('');
+      if (folder?.stale) { // the phone didn't answer: the kept list stays, marked as such
+        busy('Shown as last seen: the phone didn’t answer.');
+        toast(err.message, true);
+        return;
+      }
       folder = null;
       stopPreviews();
       render();
       note(err.message, ' ', h('button', { type: 'button', class: 'link', onclick: () => go(to, { step: false }) }, 'Try again'));
     }
+  }
+
+  /** A folder not seen since the app started: the list kept on this PC, shown at once while the phone is asked. */
+  async function showSaved(serial, to, mine, focus) {
+    try {
+      const got = await api('/api/browse', { method: 'POST', body: JSON.stringify({ serial, path: to, saved: true }) });
+      if (mine !== turn || !got.saved) return;
+      folder = { id: got.id, path: got.path, entries: got.entries, media: got.media ?? {}, scroll: 0, stale: true };
+      render();
+      if (focus) reveal(focus);
+    } catch { /* nothing kept: wait for the phone */ }
   }
 
   function remember(serial) {
@@ -359,6 +378,7 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
       if (!res.ok) throw new Error('no previews');
       const got = unpackPreviews(await res.arrayBuffer());
       const blobs = await Promise.all(got.map(picture));
+      got.forEach((p, i) => { if (p.whole && blobs[i] && keys.has(p.name)) keepPreview(f, p.name, blobs[i]); });
       got.forEach((p, i) => { if (blobs[i] && keys.has(p.name)) addThumb(keys.get(p.name), URL.createObjectURL(blobs[i])); });
       for (const k of keys.values()) if (!thumbs.has(k)) addThumb(k, '');
       if (folder?.path === f.path) {
@@ -371,6 +391,16 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     pump();
   }
 
+  /** Sends a preview made from a whole picture to be kept on this PC, so the picture isn't read whole next time. */
+  async function keepPreview(f, name, blob) {
+    try {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let text = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      await api(`/api/browse/${f.id}/keep`, { method: 'POST', body: JSON.stringify({ name, data: btoa(text) }) });
+    } catch { /* read whole again next time */ }
+  }
+
   /** The preview as a blob; a whole picture is made small first. */
   async function picture(p) {
     const blob = new Blob([p.bytes], { type: p.type });
@@ -378,9 +408,12 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     try {
       const bmp = await createImageBitmap(blob, { resizeWidth: 400, resizeQuality: 'medium' });
       const c = new OffscreenCanvas(bmp.width, bmp.height);
-      c.getContext('2d').drawImage(bmp, 0, 0);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; // under transparent parts, as JPEG has none
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(bmp, 0, 0);
       bmp.close();
-      return await c.convertToBlob({ type: 'image/webp', quality: 0.8 });
+      return await c.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
     } catch {
       return null; // not a picture after all
     }
