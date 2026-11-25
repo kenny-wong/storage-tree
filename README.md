@@ -48,6 +48,6 @@ npm run dist   # the Windows installer in dist/ (draws the icon, copies this PC'
 - `lib/tree.js`: the folder tree, totals, largest files and file types, and taking deleted entries out. Scans are kept in memory (the newest 3, plus the newest of each source, so the This PC and Phone tabs each go back to their own last scan).
 - `lib/robocopy.js`: Windows' robocopy in list-only mode (`/L`, Unicode log): locked files by name without special rights, and the protected folders in backup mode (`/B`) from one PowerShell started with `-Verb RunAs`.
 - `lib/remove.js`: the Recycle Bin (Windows' `SHFileOperation` through PowerShell) and `rm -rf` on a phone.
-- `lib/pull.js` and `lib/tasks.js`: copies from a phone, one `adb exec-out cat` per file, a few at a time, each written as `.part` and renamed when complete; background tasks with progress and cancel.
+- `lib/pull.js` and `lib/tasks.js`: copies from a phone, one `adb pull` per file, a few at a time, each written under a temporary `storagetree-….part` name and renamed when complete; a PC name is held while a file is saved to it, so two phone files that become the same Windows name are both kept; background tasks with progress and cancel.
 - `public/`: the page (plain HTML, CSS and ES modules); `treemap.js` is a squarified treemap layout drawn on a canvas. Dragging a phone file out uses Chrome's `DownloadURL` drag, which fetches the file from the phone as it is dropped.
 - `electron/`: the desktop app, running the same server in its own window (port 8851).

@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { findAdb, hostPortParam, mergeDevices, parseConnect, parseMdns, parsePair, transportOf } from '../lib/adb.js';
 import { createTree, largestFiles } from '../lib/tree.js';
-import { copyOne, pullPlan, pullToPc, safeName, targetFor } from '../lib/pull.js';
+import { adbPath, claimTarget, copyOne, heldNames, partOf, pathKey, pullError, pullPlan, pullToPc, safeName, targetFor } from '../lib/pull.js';
 import { removeOnPhone } from '../lib/remove.js';
 import { startScan } from '../lib/scans.js';
 import { cancelTask, dismissTask, getTask, startTask, taskStatus } from '../lib/tasks.js';
@@ -44,7 +44,70 @@ function fakeCat(files, { delay = 0 } = {}) {
   return { spawnAdb, calls };
 }
 
-const fakeTask = () => ({ bytes: 0, files: 0, skipped: 0, cancelled: false, hooks: new Set(), onCancel(fn) { this.hooks.add(fn); return () => this.hooks.delete(fn); }, errors: [], addError(p, m) { this.errors.push([p, m]); } });
+/**
+ * A stand-in for `adb pull <phone path> <PC path>` that behaves as the real
+ * one was measured to: it replaces the PC file with the bytes and prints its
+ * summary to stderr; a missing phone file, or a phone folder pulled onto a
+ * file, is an error line and exit code 1 with the PC file left alone.
+ *   delay: ms before anything happens      pause: ms between the two halves of the bytes (0 = all at once)
+ *   code: exit code after the bytes        folders / silent: phone paths that are folders / that adb skips with code 0
+ *   failOnce: phone paths whose first pull fails    before(remote, local): runs just before a successful end
+ *   onKill(local): runs when the process is killed  noStart: adb.exe can't be started
+ */
+function fakePull(files, { delay = 0, pause = 0, code = 0, folders = [], silent = [], failOnce = [], before = null, onKill = null, noStart = false } = {}) {
+  const calls = [];
+  const failed = new Set();
+  const spawnAdb = (adb, args) => {
+    calls.push(args);
+    const [remote, local] = args.slice(-2);
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    if (noStart) {
+      child.kill = () => {};
+      setImmediate(() => child.emit('error', Object.assign(new Error('spawn adb ENOENT'), { code: 'ENOENT' })));
+      return child;
+    }
+    child.pid = 4242;
+    let done = false;
+    let timer = null;
+    const end = (exit, text = '', signal = null) => {
+      done = true;
+      child.stdout.end();
+      child.stderr.end(text);
+      setTimeout(() => child.emit('close', exit, signal), 5);
+    };
+    child.kill = () => {
+      if (done) return;
+      clearTimeout(timer);
+      onKill?.(local);
+      end(null, '', 'SIGTERM');
+    };
+    timer = setTimeout(() => {
+      if (folders.includes(remote)) return end(1, `adb: error: target '${local}' is not a directory\n`);
+      if (silent.includes(remote)) return end(0, `${remote}: 0 files pulled, 0 skipped.\n`);
+      const data = files[remote];
+      if (data == null) return end(1, `adb: error: failed to stat remote object '${remote}': No such file or directory\n`);
+      if (failOnce.includes(remote) && !failed.has(remote)) {
+        failed.add(remote);
+        return end(1, `adb: error: failed to copy '${remote}' to '${local}': remote read failed\n`);
+      }
+      const half = pause ? Math.floor(data.length / 2) : data.length;
+      rmSync(local, { force: true });
+      writeFileSync(local, data.subarray(0, half));
+      timer = setTimeout(() => {
+        appendFileSync(local, data.subarray(half));
+        before?.(remote, local);
+        if (code) end(code, `adb: error: failed to copy '${remote}' to '${local}': remote read failed\n${remote}: 0 files pulled, 0 skipped.\n`);
+        else end(0, `${remote}: 1 file pulled, 0 skipped. 1.0 MB/s (${data.length} bytes in 0.001s)\n`);
+      }, pause);
+    }, delay);
+    return child;
+  };
+  return { spawnAdb, calls };
+}
+
+const fakeTask =() => ({ bytes: 0, files: 0, skipped: 0, cancelled: false, hooks: new Set(), onCancel(fn) { this.hooks.add(fn); return () => this.hooks.delete(fn); }, errors: [], addError(p, m) { this.errors.push([p, m]); } });
 
 /* ---------- adb: devices and Wi-Fi ---------- */
 
@@ -201,7 +264,7 @@ test('pullToPc copies a folder, keeps dates, skips what is there and leaves no .
   const dir = mkdtempSync(join(tmpdir(), 'storage-tree-pull-'));
   try {
     const t = sampleTree();
-    const { spawnAdb, calls } = fakeCat({
+    const { spawnAdb, calls } = fakePull({
       '/sdcard/DCIM/Camera/a.jpg': Buffer.alloc(3000, 1),
       '/sdcard/DCIM/Camera/b.jpg': Buffer.alloc(2000, 2),
       '/sdcard/DCIM/c.png': Buffer.alloc(500, 3),
@@ -218,43 +281,333 @@ test('pullToPc copies a folder, keeps dates, skips what is there and leaves no .
     assert.equal(task.skipped, 1);
     assert.equal(task.bytes, 5500);
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls[0].slice(0, 3), ['-s', 'X', 'exec-out']);
+    assert.deepEqual(calls[0].slice(0, 3), ['-s', 'X', 'pull']);
     assert.ok(!readdirSync(join(dir, 'DCIM', 'Camera')).some((n) => n.endsWith('.part')));
+    assert.equal(heldNames(), 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('a file that comes back short is reported and not saved', async () => {
+/** Runs `fn(dir)` with a scratch folder that is removed afterwards. */
+async function inDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'storage-tree-pull-'));
   try {
-    const { spawnAdb } = fakeCat({ '/sdcard/x.bin': Buffer.alloc(10) });
-    const task = fakeTask();
-    await assert.rejects(copyOne({ adb: 'adb', serial: 'X', remote: '/sdcard/x.bin', target: join(dir, 'x.bin'), size: 20, mtime: 0, task, spawnAdb }), /Got 10 of 20 bytes/);
-    await assert.rejects(copyOne({ adb: 'adb', serial: 'X', remote: '/sdcard/none', target: join(dir, 'none'), size: 5, mtime: 0, task, spawnAdb }), /would not send/);
-    assert.deepEqual(readdirSync(dir), []);
-    assert.equal(task.bytes, 0);
+    await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** copyOne with the usual arguments filled in. */
+const copy = (dir, spawnAdb, task, remote, name, size, more = {}) => copyOne({ adb: 'adb', serial: 'X', remote, target: join(dir, name), size, mtime: 0, task, spawnAdb, ...more });
+
+test('a file that comes back short, or is not there, is reported and not saved', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({ '/sdcard/x.bin': Buffer.alloc(10) });
+  const task = fakeTask();
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/x.bin', 'x.bin', 20), /Got 10 of 20 bytes/);
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/none', 'none', 5), /^Error: failed to stat remote object '\/sdcard\/none': No such file or directory$/);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(task.bytes, 0);
+}));
+
+test('cancelling a copy part way stops it, removes the half file and keeps the bytes that arrived', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({ '/sdcard/big.bin': Buffer.alloc(100) }, { pause: 300 });
+  const task = startTask({ kind: 'pull', label: 'big.bin' }, (t) => copy(dir, spawnAdb, t, '/sdcard/big.bin', 'big.bin', 100));
+  await tick(40);
+  assert.equal(dismissTask(task.id), false); // still running
+  assert.deepEqual(readdirSync(dir), [basename(partOf(join(dir, 'big.bin')))]);
+  cancelTask(task.id);
+  await tick(60);
+  assert.equal(getTask(task.id).state, 'cancelled');
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(task.bytes, 50);
+  assert.equal(task.errorCount, 0);
+  assert.equal(dismissTask(task.id), true);
+}));
+
+test('progress follows the growing file and ends at exactly the size', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({ '/sdcard/v.mp4': Buffer.alloc(100, 7) }, { pause: 120 });
+  const target = join(dir, 'v.mp4');
+  writeFileSync(partOf(target), Buffer.alloc(999)); // a leftover of a copy that was cut off
+  const task = fakeTask();
+  const seen = [];
+  const watch = setInterval(() => seen.push(task.bytes), 10);
+  const got = await copy(dir, spawnAdb, task, '/sdcard/v.mp4', 'v.mp4', 100, { pollMs: 10 });
+  clearInterval(watch);
+  assert.equal(got, 100);
+  assert.equal(task.bytes, 100);
+  assert.ok(seen.includes(50), `half way was seen: ${seen}`);
+  assert.ok(seen.every((n) => n === 0 || n === 50 || n === 100), `the leftover was not counted: ${seen}`);
+  assert.deepEqual(readdirSync(dir), ['v.mp4']);
+  assert.equal(readFileSync(target)[0], 7);
+}));
+
+test('a folder named like the temporary file is left alone and the file is reported', () => inDir(async (dir) => {
+  const { spawnAdb, calls } = fakePull({ '/sdcard/x.bin': Buffer.alloc(10) });
+  const part = partOf(join(dir, 'x.bin'));
+  mkdirSync(part);
+  writeFileSync(join(part, 'mine.txt'), 'keep');
+  const task = fakeTask();
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/x.bin', 'x.bin', 10), /Can’t write in /);
+  assert.equal(readFileSync(join(part, 'mine.txt'), 'utf8'), 'keep');
+  assert.equal(calls.length, 0);
+  assert.equal(task.bytes, 0);
+}));
+
+test('files named x and x.part side by side are both saved whole', () => inDir(async (dir) => {
+  const t = createTree('/sdcard', '/');
+  t.addFile(['Download', 'x'], 10, 100);
+  t.addFile(['Download', 'x.part'], 20, 100);
+  t.finish();
+  const { spawnAdb } = fakePull({ '/sdcard/Download/x': Buffer.alloc(10, 1), '/sdcard/Download/x.part': Buffer.alloc(20, 2) }, { pause: 20 });
+  const task = fakeTask();
+  await pullToPc({ adb: 'adb', serial: 'X', plan: pullPlan(t, t.root.sub.get('Download')), dest: dir, task, spawnAdb, lanes: 2 });
+  assert.deepEqual(readdirSync(join(dir, 'Download')).sort(), ['x', 'x.part']);
+  assert.equal(readFileSync(join(dir, 'Download', 'x')).length, 10);
+  assert.equal(readFileSync(join(dir, 'Download', 'x.part')).length, 20);
+  assert.deepEqual(task.errors, []);
+}));
+
+test('an empty file is saved; adb ending well without writing anything is not', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({ '/sdcard/empty': Buffer.alloc(0) }, { silent: ['/sdcard/odd0', '/sdcard/odd5'] });
+  const task = fakeTask();
+  assert.equal(await copy(dir, spawnAdb, task, '/sdcard/empty', 'empty', 0), 0);
+  assert.equal(statSync(join(dir, 'empty')).size, 0);
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/odd0', 'odd0', 0), /Got 1 of 0 bytes/);
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/odd5', 'odd5', 5), /Got 0 of 5 bytes/);
+  assert.deepEqual(readdirSync(dir), ['empty']);
+  assert.equal(task.bytes, 0);
+}));
+
+test('phone names with quotes and spaces reach adb as they are', () => inDir(async (dir) => {
+  const remote = '/sdcard/it\'s a "file" & more $(x).txt';
+  const { spawnAdb, calls } = fakePull({ [remote]: Buffer.alloc(4) });
+  await copy(dir, spawnAdb, fakeTask(), remote, 'saved.txt', 4);
+  assert.deepEqual(calls[0], ['-s', 'X', 'pull', remote, partOf(join(dir, 'saved.txt'))]);
+  assert.deepEqual(readdirSync(dir), ['saved.txt']);
+}));
+
+test('a folder on the phone where the scan saw a file is reported in plain words', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({}, { folders: ['/sdcard/was-a-file'] });
+  const task = fakeTask();
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/was-a-file', 'a', 0), /folder on the phone now/);
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/was-a-file', 'b', 4096), /folder on the phone now/);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(task.bytes, 0);
+}));
+
+test('an adb error after all the bytes arrived is still an error', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({ '/sdcard/x.bin': Buffer.alloc(10) }, { code: 1 });
+  const task = fakeTask();
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/x.bin', 'x.bin', 10), /^Error: failed to copy .* remote read failed$/);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(task.bytes, 0);
+}));
+
+test('a rename that fails is reported and the temporary file removed', () => inDir(async (dir) => {
+  const target = join(dir, 'x.bin');
+  const { spawnAdb } = fakePull({ '/sdcard/x.bin': Buffer.alloc(10) }, { before: () => mkdirSync(target) }); // a folder took the name meanwhile
+  const task = fakeTask();
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/x.bin', 'x.bin', 10));
+  assert.deepEqual(readdirSync(dir), ['x.bin']);
+  assert.equal(statSync(target).isDirectory(), true);
+  assert.equal(task.bytes, 0);
+}));
+
+test('adb that can’t be started is reported and nothing is left', () => inDir(async (dir) => {
+  const { spawnAdb } = fakePull({}, { noStart: true });
+  const task = fakeTask();
+  await assert.rejects(copy(dir, spawnAdb, task, '/sdcard/x.bin', 'x.bin', 10), /ENOENT/);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(task.bytes, 0);
+}));
+
+test('a half file that can’t be removed is named, after an error and after a cancel', () => inDir(async (dir) => {
+  const spoil = (local) => { // something turned our file into a folder with things in it, which unlink won't remove
+    rmSync(local, { force: true });
+    mkdirSync(local);
+    writeFileSync(join(local, 'in.txt'), 'x');
+  };
+  const failing = fakePull({ '/sdcard/x.bin': Buffer.alloc(10) }, { code: 1, before: (remote, local) => spoil(local) });
+  const task = fakeTask();
+  const part = partOf(join(dir, 'x.bin'));
+  await assert.rejects(copy(dir, failing.spawnAdb, task, '/sdcard/x.bin', 'x.bin', 10), (err) => err.message.includes(`a half file was left: ${part}`));
+  assert.equal(task.bytes, 0);
+  rmSync(part, { recursive: true });
+
+  const killed = fakePull({ '/sdcard/y.bin': Buffer.alloc(100) }, { pause: 2000, onKill: spoil });
+  const run = startTask({ kind: 'pull', label: 'y.bin' }, (t) => copy(dir, killed.spawnAdb, t, '/sdcard/y.bin', 'y.bin', 100));
+  await tick(40);
+  cancelTask(run.id);
+  for (let i = 0; i < 100 && run.state === 'running'; i++) await tick(20);
+  assert.equal(run.state, 'cancelled');
+  assert.equal(run.errors.length, 1);
+  assert.ok(run.errors[0].message.includes(partOf(join(dir, 'y.bin'))));
+  assert.ok(run.bytes <= 50); // not the whole file
+}));
+
+test('partOf gives a short name of our own beside the target; a 250-character name is saved', () => inDir(async (dir) => {
+  const part = partOf(join(dir, 'IMG_0001.JPG'));
+  assert.equal(dirname(part), dir);
+  assert.match(basename(part), /^storagetree-[0-9a-f]{12}\.part$/);
+  assert.equal(basename(part).length, 29);
+  assert.equal(part, partOf(join(dir, 'img_0001.jpg')));
+  assert.notEqual(part, partOf(join(dir, 'IMG_0002.JPG')));
+  const long = `${'n'.repeat(246)}.bin`;
+  const { spawnAdb, calls } = fakePull({ '/sdcard/long.bin': Buffer.alloc(8) });
+  await copy(dir, spawnAdb, fakeTask(), '/sdcard/long.bin', long, 8);
+  assert.deepEqual(readdirSync(dir), [long]);
+  assert.ok(basename(calls[0].at(-1)).length < 40);
+}));
+
+test('adbPath prefixes long PC paths, and pathKey spells one path one way', { skip: sep !== '\\' }, () => {
+  assert.equal(adbPath('C:\\out\\a.jpg'), 'C:\\out\\a.jpg');
+  const long = `C:\\out\\${'d'.repeat(250)}\\a.jpg`;
+  assert.equal(adbPath(long), `\\\\?\\${long}`);
+  assert.equal(pathKey('C:\\out\\X.jpg'), pathKey('\\\\?\\c:\\out\\x.JPG'));
+  assert.notEqual(pathKey('C:\\out\\x.jpg'), pathKey('C:\\out\\y.jpg'));
 });
 
-test('cancelling a copy stops it and removes the half file', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'storage-tree-pull-'));
-  try {
-    const { spawnAdb } = fakeCat({ '/sdcard/big.bin': Buffer.alloc(100) }, { delay: 200 });
-    const task = startTask({ kind: 'pull', label: 'big.bin' }, (t) => copyOne({ adb: 'adb', serial: 'X', remote: '/sdcard/big.bin', target: join(dir, 'big.bin'), size: 100, mtime: 0, task: t, spawnAdb }));
-    await tick(30);
-    assert.equal(dismissTask(task.id), false); // still running
-    cancelTask(task.id);
-    await tick(60);
-    assert.equal(getTask(task.id).state, 'cancelled');
-    assert.deepEqual(readdirSync(dir), []);
-    assert.equal(dismissTask(task.id), true);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('pullError keeps adb’s own reason', () => {
+  assert.equal(pullError("adb: error: failed to stat remote object '/sdcard/a': No such file or directory\r\n"), "failed to stat remote object '/sdcard/a': No such file or directory");
+  assert.equal(pullError(''), 'The phone would not send this file');
+  assert.equal(pullError("adb: error: failed to copy '/sdcard/a' to 'C:\\x': remote read failed\n/sdcard/a: 0 files pulled, 0 skipped.\n"), "failed to copy '/sdcard/a' to 'C:\\x': remote read failed");
+  assert.equal(pullError("adb: error: target 'C:\\out\\storagetree-0123456789ab.part' is not a directory\n"), 'This is a folder on the phone now, not a file');
+  assert.equal(pullError("adb: device 'X' not found\n"), "device 'X' not found");
 });
+
+test('a copy with a saved, a skipped and a failed file adds up', () => inDir(async (dir) => {
+  const t = sampleTree();
+  const { spawnAdb } = fakePull({ '/sdcard/DCIM/Camera/a.jpg': Buffer.alloc(3000, 1), '/sdcard/DCIM/c.png': Buffer.alloc(500, 3) }); // b.jpg is gone from the phone
+  mkdirSync(join(dir, 'DCIM'));
+  writeFileSync(join(dir, 'DCIM', 'c.png'), Buffer.alloc(500));
+  const task = fakeTask();
+  await pullToPc({ adb: 'adb', serial: 'X', plan: pullPlan(t, t.root.sub.get('DCIM')), dest: dir, task, spawnAdb });
+  assert.equal(task.bytes, task.totalBytes);
+  assert.equal(task.files, 2);
+  assert.equal(task.skipped, 1);
+  assert.deepEqual(task.errors.map((e) => e[0]), ['/sdcard/DCIM/Camera/b.jpg']);
+  assert.deepEqual(readdirSync(join(dir, 'DCIM', 'Camera')), ['a.jpg']);
+  assert.equal(heldNames(), 0);
+}));
+
+/* ---------- one PC name wanted by two files ---------- */
+
+test('claimTarget never gives one name to two files asking at once', async () => {
+  const none = async () => { throw Object.assign(new Error('nope'), { code: 'ENOENT' }); };
+  const used = new Set();
+  const [a, b] = await Promise.all([claimTarget('D:\\out\\n.jpg', 10, none, used), claimTarget('D:\\out\\N.JPG', 10, none, used)]);
+  assert.deepEqual([a.target, b.target].sort(), ['D:\\out\\N (2).JPG', 'D:\\out\\n.jpg']);
+  assert.equal(heldNames(), 2);
+  a.release();
+  b.release();
+  assert.equal(heldNames(), 0);
+});
+
+test('a name somebody is saving to is waited for, then looked at afresh', async () => {
+  const disk = {};
+  const statFn = async (p) => {
+    if (!(p in disk)) throw Object.assign(new Error('nope'), { code: 'ENOENT' });
+    return { size: disk[p] };
+  };
+  // The first asker's look at the disk is held back; the second must not act before the first is done.
+  let answer;
+  const slow = () => new Promise((resolve, reject) => { answer = () => reject(Object.assign(new Error('nope'), { code: 'ENOENT' })); });
+  const first = claimTarget('D:\\out\\v.mp4', 10, slow);
+  let second = null;
+  const waiting = claimTarget('D:\\out\\v.mp4', 10, statFn).then((c) => { second = c; return c; });
+  await tick();
+  assert.equal(second, null);
+  answer();
+  const a = await first;
+  assert.equal(a.target, 'D:\\out\\v.mp4');
+  await tick();
+  assert.equal(second, null); // still being written
+  disk['D:\\out\\v.mp4'] = 10; // the first copy finished
+  a.release();
+  assert.equal((await waiting).target, null); // really there now: skip
+  assert.equal(heldNames(), 0);
+
+  // The first copy fails: the second saves the file itself.
+  const b = await claimTarget('D:\\out\\w.mp4', 10, statFn);
+  const other = claimTarget('D:\\out\\w.mp4', 10, statFn);
+  b.release();
+  const c = await other;
+  assert.equal(c.target, 'D:\\out\\w.mp4');
+  c.release();
+  assert.equal(heldNames(), 0);
+});
+
+test('a folder at the target’s path is not taken for the same file', async () => {
+  const statFn = async (p) => {
+    if (p !== 'D:\\b') throw Object.assign(new Error('nope'), { code: 'ENOENT' });
+    return { size: 0, isDirectory: () => true };
+  };
+  assert.equal(await targetFor('D:\\b', 0, statFn), 'D:\\b (2)');
+  assert.equal(heldNames(), 0);
+});
+
+test('two phone files that become one PC name are both saved, also at the same size', () => inDir(async (dir) => {
+  const t = createTree('/sdcard', '/');
+  t.addFile(['Notes', 'a:b.txt'], 100, 100);
+  t.addFile(['Notes', 'a?b.txt'], 100, 100);
+  t.finish();
+  const files = { '/sdcard/Notes/a:b.txt': Buffer.alloc(100, 1), '/sdcard/Notes/a?b.txt': Buffer.alloc(100, 2) };
+  const plan = pullPlan(t, t.root.sub.get('Notes'));
+  const first = fakePull(files, { pause: 20 });
+  const task = fakeTask();
+  await pullToPc({ adb: 'adb', serial: 'X', plan, dest: dir, task, spawnAdb: first.spawnAdb, lanes: 2 });
+  assert.deepEqual(readdirSync(join(dir, 'Notes')).sort(), ['a_b (2).txt', 'a_b.txt']);
+  assert.deepEqual(['a_b.txt', 'a_b (2).txt'].map((n) => readFileSync(join(dir, 'Notes', n))[0]).sort(), [1, 2]);
+  assert.equal(task.skipped, 0);
+  assert.equal(task.files, 2);
+  assert.deepEqual(task.errors, []);
+  const again = fakePull(files);
+  const task2 = fakeTask();
+  await pullToPc({ adb: 'adb', serial: 'X', plan, dest: dir, task: task2, spawnAdb: again.spawnAdb, lanes: 2 });
+  assert.equal(task2.skipped, 2);
+  assert.equal(again.calls.length, 0);
+  assert.equal(heldNames(), 0);
+}));
+
+test('saving one folder twice at once makes one set of files', () => inDir(async (dir) => {
+  const t = sampleTree();
+  const { spawnAdb, calls } = fakePull({
+    '/sdcard/DCIM/Camera/a.jpg': Buffer.alloc(3000, 1),
+    '/sdcard/DCIM/Camera/b.jpg': Buffer.alloc(2000, 2),
+    '/sdcard/DCIM/c.png': Buffer.alloc(500, 3),
+  }, { pause: 20 });
+  const plan = pullPlan(t, t.root.sub.get('DCIM'));
+  const [one, two] = [fakeTask(), fakeTask()];
+  await Promise.all([one, two].map((task) => pullToPc({ adb: 'adb', serial: 'X', plan, dest: dir, task, spawnAdb, lanes: 2 })));
+  assert.equal(calls.length, 3); // each file came from the phone once
+  assert.equal(one.skipped + two.skipped, 3);
+  assert.equal(one.files + two.files, 6);
+  assert.deepEqual([...one.errors, ...two.errors], []);
+  assert.deepEqual(readdirSync(join(dir, 'DCIM')).sort(), ['Camera', 'c.png']);
+  assert.deepEqual(readdirSync(join(dir, 'DCIM', 'Camera')).sort(), ['a.jpg', 'b.jpg']);
+  assert.equal(one.bytes, 5500);
+  assert.equal(two.bytes, 5500);
+  assert.equal(heldNames(), 0);
+}));
+
+test('when one of two copies of a file fails, the other saves it and does not call it already there', () => inDir(async (dir) => {
+  const t = createTree('/sdcard', '/');
+  t.addFile(['v.mp4'], 100, 100);
+  t.finish();
+  const { spawnAdb, calls } = fakePull({ '/sdcard/v.mp4': Buffer.alloc(100, 9) }, { delay: 20, failOnce: ['/sdcard/v.mp4'] });
+  const plan = pullPlan(t, t.root, 'v.mp4');
+  const [one, two] = [fakeTask(), fakeTask()];
+  await Promise.all([one, two].map((task) => pullToPc({ adb: 'adb', serial: 'X', plan, dest: dir, task, spawnAdb })));
+  assert.equal(calls.length, 2);
+  assert.equal(one.errors.length + two.errors.length, 1);
+  assert.equal(one.skipped + two.skipped, 0);
+  assert.equal(one.files + two.files, 1);
+  assert.deepEqual(readdirSync(dir), ['v.mp4']);
+  assert.equal(readFileSync(join(dir, 'v.mp4'))[0], 9);
+  assert.equal(heldNames(), 0);
+}));
 
 test('taskStatus reports errors and the final state', async () => {
   const task = startTask({ kind: 'pull', label: 'x' }, async (t) => { t.addError('/a', 'nope'); });
@@ -351,7 +704,7 @@ test('the pull route copies in the background and refuses this PC’s scans', as
   const dir = mkdtempSync(join(tmpdir(), 'storage-tree-pullroute-'));
   const scan = await phoneScan();
   const saved = { ...scans.deps };
-  const { spawnAdb } = fakeCat({ '/sdcard/DCIM/a.jpg': Buffer.alloc(3000), '/sdcard/DCIM/b.jpg': Buffer.alloc(2000) });
+  const { spawnAdb } = fakePull({ '/sdcard/DCIM/a.jpg': Buffer.alloc(3000), '/sdcard/DCIM/b.jpg': Buffer.alloc(2000) });
   Object.assign(scans.deps, { findAdb: () => 'adb', spawnAdb });
   try {
     const dcim = scan.tree.root.sub.get('DCIM');
