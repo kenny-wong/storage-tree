@@ -26,7 +26,7 @@ A scan covers shared storage (`/storage/emulated/0`: photos, videos, downloads, 
 
 ## Running
 
-The desktop app: run `Storage-Tree-Setup-<version>.exe` (built with `npm run dist`). It installs for the current user, with Start menu and desktop shortcuts, and brings adb with it.
+The desktop app: download `Storage-Tree-Setup-<version>.exe` from [Releases](https://github.com/kenny-wong/storage-tree/releases/latest) (or build it with `npm run dist`) and run it. It is not code-signed, so Windows may ask: **More info → Run anyway**. It installs for the current user, with Start menu and desktop shortcuts, and brings adb with it.
 
 From the source: Windows 10/11 and [Node.js](https://nodejs.org/) 24 or later. No npm packages are needed to run it; Electron and electron-builder are only for building the installer.
 
