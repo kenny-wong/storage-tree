@@ -19,6 +19,7 @@ const { scanStatus, startScan } = await import('../lib/scans.js');
 const { fileTypes } = await import('../lib/tree.js');
 const { kindOf } = await import('../public/kinds.js');
 const { startTask } = await import('../lib/tasks.js');
+const { packPreviews } = await import('../lib/preview.js');
 
 /* ---------- made-up files ---------- */
 
@@ -146,6 +147,23 @@ async function demoScan(source) {
   return scan;
 }
 
+// The Browse tab's folder: made-up photos, drawn as hills at different times of day.
+const SKIES = [['#8ec9f0', '#e8f5fd', '#fff3b0'], ['#f4a259', '#fbe3c0', '#fff1d6'], ['#31436f', '#8a6fa8', '#f3d9e4'], ['#a8d8c8', '#eef8f2', '#fffbe0'], ['#e07a6b', '#f6c7a8', '#ffe9c7']];
+const HILLS = [['#4f8a5b', '#2f6a48', '#1f4d38'], ['#7a6a8a', '#574a6e', '#3a3350'], ['#5f8f9f', '#3c6f80', '#24505f'], ['#b5884f', '#8d6437', '#664724']];
+function scenery(i) {
+  seed = 100 + i * 37;
+  const [top, low, sun] = SKIES[i % SKIES.length];
+  const ridge = (base, amp) => `M0 300V${base}${Array.from({ length: 6 }, (_, k) => `Q${k * 70 + 35} ${base - between(0, amp)} ${(k + 1) * 70} ${base - between(-12, 12)}`).join('')}V300Z`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><defs><linearGradient id="g" x2="0" y2="1"><stop stop-color="${top}"/><stop offset="1" stop-color="${low}"/></linearGradient></defs><rect width="400" height="300" fill="url(#g)"/><circle cx="${between(60, 340)}" cy="${between(50, 120)}" r="${between(18, 34)}" fill="${sun}"/>${HILLS[(i * 3) % HILLS.length].map((c, k) => `<path d="${ridge(170 + k * 42, 90 - k * 18)}" fill="${c}"/>`).join('')}</svg>`;
+}
+const BROWSE = '/storage/emulated/0/DCIM/Camera';
+const browseEntries = [{ name: 'Edited', dir: true, size: 0, mtime: 1782000000 }, ...Array.from({ length: 1284 }, (_, i) => {
+  const t = 1785600000 - i * 31_000;
+  const video = i % 6 === 2;
+  return { name: `${stamp(t)}.${video ? 'mp4' : 'jpg'}`, dir: false, size: video ? 84 * MB + i * 1e5 : 3.1 * MB + i * 2000, mtime: t };
+})];
+const browseMedia = Object.fromEntries(browseEntries.map((e, i) => [e.name, e.name.endsWith('mp4') ? [3840, 2160, 7000 + (i * 7919) % 95_000] : [4000, 3000, 0]]));
+
 const app = createApp({ port: PORT });
 const server = createServer((req, res) => {
   const path = req.url.split('?')[0];
@@ -157,6 +175,18 @@ const server = createServer((req, res) => {
   if (path === '/api/drives') return json({ drives: [{ path: 'C:\\', total: 1000 * GB, free: 612 * GB }, { path: 'D:\\', total: 500 * GB, free: 500 * GB - (pcSize || 430 * GB) - 2 * GB }, { path: 'E:\\', total: 2000 * GB, free: 1480 * GB }] });
   if (path === '/api/devices') return json({ adb: 'adb.exe', devices: [PHONE] });
   if (/^\/api\/devices\/[^/]+\/storage$/.test(path)) return json(phoneStorage());
+  if (path === '/api/browse/places') return json({ places: [['Internal storage', ''], ['Camera', '/DCIM/Camera'], ['DCIM', '/DCIM'], ['Screenshots', '/DCIM/Screenshots'], ['Pictures', '/Pictures'], ['Movies', '/Movies'], ['Download', '/Download'], ['Music', '/Music']].map(([label, p]) => ({ label, path: `/storage/emulated/0${p}` })) });
+  if (path === '/api/browse') return json({ id: 1, path: BROWSE, entries: browseEntries });
+  if (path === '/api/browse/1/media') return json({ media: browseMedia });
+  if (path === '/api/browse/1/thumbs') {
+    let text = '';
+    req.on('data', (c) => { text += c; });
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+      res.end(packPreviews(new Map(JSON.parse(text).names.map((n) => [n, { data: Buffer.from(scenery(browseEntries.findIndex((e) => e.name === n))), type: 'image/svg+xml', whole: false }]))));
+    });
+    return;
+  }
   if (path === '/api/scans' && req.method === 'POST') {
     let text = '';
     req.on('data', (c) => { text += c; });
@@ -287,6 +317,16 @@ try {
   await run("document.getElementById('save-dialog').close()");
   await run("document.getElementById('open-wifi').click()");
   await shot('wifi.png', await around('#wifi-dialog', 26));
+
+  // Browse: a folder of photos and videos.
+  await run("document.getElementById('wifi-dialog').close()");
+  await size();
+  await run("document.getElementById('mode-browse').click()");
+  await until("document.querySelectorAll('.b-art img').length > 15");
+  await run("const c = document.querySelectorAll('.b-cell'); c[7].click(); document.getElementById('b-scroll').blur()");
+  await sleep(600);
+  await shot('browse.png');
+  await run("document.getElementById('mode-phone').click()");
 
   startTask({ kind: 'pull', label: '20260718_153012.mp4 → C:\\Users\\Sam\\Downloads', dest: 'C:\\Users\\Sam\\Downloads\\20260718_153012.mp4', isFile: true }, (t) => {
     Object.assign(t, { bytes: 2.9 * GB, totalBytes: 4.6 * GB, totalFiles: 1, current: null });

@@ -197,7 +197,7 @@ export async function removeItem({ params, body }) {
 }
 
 /** The nearest folder of `path` that exists (for free space before a copy). */
-function existingAncestor(path) {
+export function existingAncestor(path) {
   let p = path;
   while (!existsSync(p)) {
     const up = dirname(p);

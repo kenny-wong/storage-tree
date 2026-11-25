@@ -13,11 +13,12 @@
     <div class="brand">
       <img src="icon.svg" alt="" width="26" height="26">
       <h1>Storage Tree</h1>
-      <span class="version" id="version">v1.7.0</span>
+      <span class="version" id="version">v1.8.0</span>
     </div>
-    <div class="modes" role="tablist" aria-label="What to scan">
+    <div class="modes" role="tablist" aria-label="What to look at">
       <button type="button" role="tab" id="mode-local" aria-selected="true">This PC</button>
       <button type="button" role="tab" id="mode-phone" aria-selected="false">Phone</button>
+      <button type="button" role="tab" id="mode-browse" aria-selected="false">Browse phone</button>
     </div>
   </header>
 
@@ -92,6 +93,71 @@
       </section>
     </div>
   </main>
+
+  <main id="browse" hidden>
+    <div class="b-bar">
+      <div class="b-nav">
+        <button type="button" class="ghost" id="b-back" title="Back (Alt+Left)" aria-label="Back">←</button>
+        <button type="button" class="ghost" id="b-forward" title="Forward (Alt+Right)" aria-label="Forward">→</button>
+        <button type="button" class="ghost" id="b-up" title="Up one folder (Backspace)" aria-label="Up one folder">↑</button>
+        <button type="button" class="ghost" id="b-reload" title="Read this folder again" aria-label="Reload">⟳</button>
+      </div>
+      <nav class="crumbs b-crumbs" id="b-crumbs" aria-label="Phone folder path"></nav>
+      <input type="search" id="b-filter" placeholder="Find in this folder" autocomplete="off" spellcheck="false" aria-label="Find in this folder">
+    </div>
+    <div class="b-bar">
+      <div class="b-group">
+        <label class="field">Sort
+          <select id="b-sort">
+            <option value="date">Date</option><option value="name">Name</option><option value="size">Size</option>
+            <option value="type">Type</option><option value="dims">Dimensions</option><option value="length">Video length</option>
+          </select>
+        </label>
+        <button type="button" class="ghost" id="b-way"></button>
+        <label class="field">Show
+          <select id="b-kind">
+            <option value="all">Everything</option><option value="image">Pictures</option><option value="video">Videos</option><option value="other">Other files</option>
+          </select>
+        </label>
+        <label class="b-check"><input type="checkbox" id="b-hidden"> Hidden files</label>
+      </div>
+      <div class="tabs b-views" role="tablist" aria-label="View">
+        <button type="button" role="tab" data-view="large" aria-selected="true">Large</button>
+        <button type="button" role="tab" data-view="medium" aria-selected="false">Medium</button>
+        <button type="button" role="tab" data-view="list" aria-selected="false">List</button>
+        <button type="button" role="tab" data-view="details" aria-selected="false">Details</button>
+      </div>
+    </div>
+    <div class="b-panes">
+      <nav class="pane b-places" id="b-places" aria-label="Places"></nav>
+      <section class="pane b-list">
+        <div class="grid-head b-cols" id="b-head" hidden></div>
+        <div class="b-scroll" id="b-scroll" tabindex="0" role="listbox" aria-multiselectable="true" aria-label="Folder contents">
+          <div class="b-space" id="b-space"></div>
+        </div>
+        <div class="b-note" id="b-note" hidden></div>
+        <div class="b-status"><span id="b-count"></span><span id="b-busy"></span></div>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="viewer" class="viewer" aria-label="Picture">
+    <div class="v-bar">
+      <div class="v-name"><b id="v-name"></b><span id="v-info"></span></div>
+      <div class="v-buttons">
+        <button type="button" id="v-zoom" title="Actual size or fit (Space)">100%</button>
+        <button type="button" id="v-open">Open in Windows</button>
+        <button type="button" id="v-save">Save to PC…</button>
+        <button type="button" id="v-close" aria-label="Close" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div class="v-stage" id="v-stage" tabindex="0" autofocus>
+      <img id="v-img" alt="" draggable="false">
+      <p id="v-error" hidden></p>
+      <button type="button" class="v-side prev" id="v-prev" aria-label="Previous picture">‹</button>
+      <button type="button" class="v-side next" id="v-next" aria-label="Next picture">›</button>
+    </div>
+  </dialog>
 
   <div class="menu" id="menu" role="menu" hidden></div>
   <div class="toast" id="toast" role="status" hidden></div>

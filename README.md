@@ -1,6 +1,6 @@
 # Storage Tree
 
-See what fills a disk, on this PC or on an Android phone, and clear it out.
+See what fills a disk, on this PC or on an Android phone, and clear it out. Browse a phone's photos and videos without File Explorer's wait.
 
 **[Download for Windows](https://github.com/kenny-wong/storage-tree/releases/latest)** · Windows 10 or 11 (64-bit) · free, nothing leaves your PC
 
@@ -16,6 +16,7 @@ See what fills a disk, on this PC or on an Android phone, and clear it out.
 - [Delete what you don't need](#3-delete-what-you-dont-need)
 - [Scan a phone](#4-scan-a-phone)
 - [Save phone files to this PC](#5-save-phone-files-to-this-pc)
+- [Browse a phone's photos and files](#6-browse-a-phones-photos-and-files)
 
 ### 1. Install
 
@@ -73,6 +74,18 @@ Progress shows at the top, with **Cancel** and, when it is done, **Show in Explo
 <img src="docs/images/copying.png" width="820" alt="A copy in progress: 2.70 of 4.28 GB at 260 MB/s">
 
 Files already there with the same size are skipped, so you can save again to finish a stopped copy. Nothing is overwritten: a different file with the same name is kept and the new one saved as "name (2)". You can also drag a phone file from the list into Explorer.
+
+### 6. Browse a phone's photos and files
+
+Choose **Browse phone** at the top right. No scan is needed: folders open one at a time, with previews of photos and videos.
+
+![A phone's Camera folder in the Browse tab: large previews of photos and videos, with places on the left](docs/images/browse.png)
+
+- **Open:** double-click a folder or picture. In the picture viewer, the arrow keys go to the next one, and the wheel zooms. Videos, documents and other pictures (such as HEIC) are copied to this PC and opened in their usual Windows program. Changes you make to such a copy don't go back to the phone.
+- **Look:** **Large**, **Medium**, **List** or **Details** (dates, sizes, dimensions, video lengths). Sort by any of them, show only pictures or videos, or type part of a name.
+- **Select:** Ctrl and Shift clicks, or Ctrl+A. Right-click for **Save to PC…** and **Delete from phone…**. One file can be dragged into Explorer.
+
+A folder of 10,000 photos takes the phone a few seconds to list the first time; after that it shows at once and is checked in the background. Previews already seen are kept on this PC (up to 600 MB). Opened copies are deleted after two days, unless you changed them. To delete it all yourself, remove `%LOCALAPPDATA%\Storage Tree\browse`.
 
 ## Phones
 
@@ -134,8 +147,11 @@ node scripts/screenshots.mjs   # retakes the pictures in docs/images (needs Chro
 - `lib/tree.js`: the folder tree, totals, largest files and file types, and taking deleted entries out. Scans are kept in memory (the newest 3, plus the newest of each source, so the This PC and Phone tabs each go back to their own last scan).
 - `lib/robocopy.js`: Windows' robocopy in list-only mode (`/L`, Unicode log): locked files by name without special rights, and the protected folders in backup mode (`/B`) from one PowerShell started with `-Verb RunAs`.
 - `lib/remove.js`: the Recycle Bin (Windows' `SHFileOperation` through PowerShell) and `rm -rf` on a phone.
+- `lib/browse.js`: lists one phone folder (`find -maxdepth 1 | stat`) and keeps the list; every action names an item of a list, never a path. Dimensions and video lengths come from Android's media index (`content query`).
+- `lib/preview.js`: previews without reading whole files: the one inside a photo (EXIF, in the first 128 KB), then Android's own thumbnail (`.thumbnails/<id>.jpg`), then the whole picture when it is small. Many files are read by one `head -v`.
+- `lib/browse-store.js`: the previews and opened copies kept on this PC, and tidying them up.
 - `lib/pull.js` and `lib/tasks.js`: copies from a phone, one `adb pull` per file, a few at a time, each written under a temporary `storagetree-….part` name and renamed when complete; a PC name is held while a file is saved to it, so two phone files that become the same Windows name are both kept; background tasks with progress and cancel.
-- `public/`: the page (plain HTML, CSS and ES modules); `treemap.js` is a squarified treemap layout drawn on a canvas. Dragging a phone file out uses Chrome's `DownloadURL` drag, which fetches the file from the phone as it is dropped.
+- `public/`: the page (plain HTML, CSS and ES modules); `treemap.js` is a squarified treemap layout drawn on a canvas, and `browse.js` the Browse tab, which draws only the tiles on screen. Dragging a phone file out uses Chrome's `DownloadURL` drag, which fetches the file from the phone as it is dropped.
 - `electron/`: the desktop app, running the same server in its own window (port 8851).
 - `scripts/release.mjs`: builds the installer, checks that it holds what is committed and that the app starts, and publishes it with the notes from `docs/releases/<version>.md`. It stops unless everything is committed and pushed and the version is new.
 - `scripts/screenshots.mjs`: runs the real server and page with a made-up drive and phone in headless Chrome and saves the pictures in `docs/images`.

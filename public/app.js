@@ -6,6 +6,7 @@ import { KIND_NAMES, kindOf } from './kinds.js';
 import { appDirsSize, isWholeShared, notScanned, phoneUsed } from './phone-gap.js';
 import { describePhoneFolder, findIn, GUIDE, KINDS } from './phone-folders.js';
 import { squarify } from './treemap.js';
+import { initBrowse } from './browse.js';
 
 const $ = (id) => document.getElementById(id);
 const MODE_KEY = 'storage-tree:mode:v1';
@@ -76,7 +77,7 @@ const state = {
 /* ---------- source: this PC / phone ---------- */
 
 // Each source tab keeps the last scan shown on it, so switching tabs shows that tab's own result.
-const views = { local: null, phone: null };
+const views = { local: null, phone: null, browse: null };
 
 function switchView(from, to) {
   views[from] = state.scan ? { scan: state.scan, nodes: state.nodes, expanded: state.expanded, selected: state.selected } : null;
@@ -105,9 +106,13 @@ function setMode(mode) {
   store.set(MODE_KEY, mode);
   $('mode-local').setAttribute('aria-selected', String(mode === 'local'));
   $('mode-phone').setAttribute('aria-selected', String(mode === 'phone'));
+  $('mode-browse').setAttribute('aria-selected', String(mode === 'browse'));
   $('source-local').hidden = mode !== 'local';
-  $('source-phone').hidden = mode !== 'phone';
-  if (mode === 'phone') loadDevices();
+  $('source-phone').hidden = mode === 'local';
+  $('phone-form').hidden = mode === 'browse';
+  if (mode === 'browse') $('phone-summary').hidden = true;
+  $('browse').hidden = mode !== 'browse';
+  if (mode !== 'local') loadDevices();
 }
 
 async function loadDrives() {
@@ -155,12 +160,14 @@ async function loadDevices() {
     if (!adb) {
       sel.replaceChildren(h('option', { value: '' }, 'adb not found'));
       phoneHelp('no-adb');
+      if (state.mode === 'browse') browse.setDevice(null);
       return;
     }
     if (!devices.length) {
       sel.replaceChildren(h('option', { value: '' }, 'No phone connected'));
       phoneHelp('none', error);
       $('phone-summary').hidden = true;
+      if (state.mode === 'browse') browse.setDevice(null);
       return;
     }
     sel.replaceChildren(...devices.map((d) => h('option', { value: d.serial }, deviceLabel(d))));
@@ -182,9 +189,14 @@ async function onDeviceChange() {
   if (d.state !== 'device') {
     phoneHelp(d.state === 'unauthorized' ? 'unauthorized' : 'offline');
     $('phone-summary').hidden = true;
+    if (state.mode === 'browse') browse.setDevice(null);
     return;
   }
   phoneHelp(null);
+  if (state.mode === 'browse') {
+    browse.setDevice(d);
+    return;
+  }
   const box = $('phone-summary');
   box.hidden = false;
   box.replaceChildren(h('span', { class: 'muted' }, 'Reading the phone’s storage…'));
@@ -696,7 +708,7 @@ function renderApps() {
 
 function setTab(tab) {
   state.tab = tab;
-  for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+  for (const b of document.querySelectorAll('.tabs button[data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
   for (const t of ['tree', 'largest', 'types', 'apps']) $(`view-${t}`).hidden = t !== tab;
   if (!state.scan?.root && tab !== 'apps') return;
   if (tab === 'largest') renderLargest();
@@ -758,12 +770,18 @@ let menuFor = null;
 function openMenu(ev, item) {
   ev.preventDefault();
   ev.stopPropagation();
-  if (!state.scan?.root) return;
+  if (state.scan?.root) showMenu(ev, item.name, item.path, actionsFor(item));
+}
+
+/** A menu at the pointer (or under the pressed button): [{ label, run, danger?, disabled? }]. */
+function showMenu(ev, name, path, actions) {
+  ev.preventDefault();
+  ev.stopPropagation();
   const menu = $('menu');
   menuFor = ev.currentTarget instanceof HTMLElement ? ev.currentTarget : null;
   menu.replaceChildren(
-    h('div', { class: 'menu-title', title: item.path }, item.name),
-    ...actionsFor(item).map((a) => h('button', { type: 'button', role: 'menuitem', class: a.danger ? 'danger-item' : null, disabled: a.disabled ?? false, onclick: () => { closeMenu(); a.run(); } }, a.label)));
+    h('div', { class: 'menu-title', title: path }, name),
+    ...actions.map((a) => h('button', { type: 'button', role: 'menuitem', class: a.danger ? 'danger-item' : null, disabled: a.disabled ?? false, onclick: () => { closeMenu(); a.run(); } }, a.label)));
   menu.hidden = false;
   const x = ev.clientX || ev.currentTarget?.getBoundingClientRect?.().left || 0;
   const y = ev.clientY || ev.currentTarget?.getBoundingClientRect?.().bottom || 0;
@@ -806,15 +824,40 @@ const whatText = (item) => (item.kind === 'dir'
 /** Asks before deleting; the dialog says whether it can be undone. */
 function confirmDelete(item) {
   const local = state.scan.source === 'local';
+  deleteDialog({
+    title: local ? `Move this ${item.kind === 'dir' ? 'folder' : 'file'} to the Recycle Bin?` : `Delete this ${item.kind === 'dir' ? 'folder' : 'file'} from the phone?`,
+    path: item.path,
+    what: whatText(item),
+    warn: local
+      ? 'You can restore it from the Recycle Bin. Windows asks first if it is too big for the bin.'
+      : `A phone has no Recycle Bin: this can’t be undone.${item.kind === 'dir' ? ' Everything in the folder is deleted.' : ''}`,
+    local,
+    async run(close) {
+      try {
+        const r = await api(`/api/scans/${state.scan.id}/delete`, { method: 'POST', body: JSON.stringify(item.kind === 'dir' ? { dir: item.dirId } : { dir: item.dirId, file: item.name }) });
+        close();
+        await afterDelete(item, r);
+        toast(`${r.recycled ? 'Moved to the Recycle Bin' : 'Deleted'}: ${item.name} (${formatBytes(r.size)} freed${r.recycled ? ' once the bin is emptied' : ''})`);
+      } catch (err) {
+        if (err.code !== 'gone') throw err;
+        close();
+        await afterDelete(item, null);
+        toast(err.message, true);
+      }
+    },
+  });
+}
+
+/** The delete question. `run(close)` deletes; what it throws is shown in the dialog. */
+function deleteDialog({ title, path, what, warn, local = false, run }) {
   const dlg = $('delete-dialog');
-  $('delete-title').textContent = local ? `Move this ${item.kind === 'dir' ? 'folder' : 'file'} to the Recycle Bin?` : `Delete this ${item.kind === 'dir' ? 'folder' : 'file'} from the phone?`;
-  $('delete-path').textContent = item.path;
-  $('delete-what').textContent = whatText(item);
-  $('delete-warn').textContent = local
-    ? 'You can restore it from the Recycle Bin. Windows asks first if it is too big for the bin.'
-    : `A phone has no Recycle Bin: this can’t be undone.${item.kind === 'dir' ? ' Everything in the folder is deleted.' : ''}`;
+  const okText = local ? 'Move to Recycle Bin' : 'Delete for good';
+  $('delete-title').textContent = title;
+  $('delete-path').textContent = path;
+  $('delete-what').textContent = what;
+  $('delete-warn').textContent = warn;
   $('delete-warn').className = local ? 'muted' : 'warn';
-  $('delete-ok').textContent = local ? 'Move to Recycle Bin' : 'Delete for good';
+  $('delete-ok').textContent = okText;
   $('delete-ok').disabled = false;
   $('delete-error').hidden = true;
   dlg.returnValue = '';
@@ -825,16 +868,12 @@ function confirmDelete(item) {
     $('delete-ok').disabled = true;
     $('delete-ok').textContent = local ? 'Moving…' : 'Deleting…';
     try {
-      const r = await api(`/api/scans/${state.scan.id}/delete`, { method: 'POST', body: JSON.stringify(item.kind === 'dir' ? { dir: item.dirId } : { dir: item.dirId, file: item.name }) });
-      dlg.close();
-      await afterDelete(item, r);
-      toast(`${r.recycled ? 'Moved to the Recycle Bin' : 'Deleted'}: ${item.name} (${formatBytes(r.size)} freed${r.recycled ? ' once the bin is emptied' : ''})`);
+      await run(() => dlg.close());
     } catch (err) {
       $('delete-error').textContent = err.message;
       $('delete-error').hidden = false;
       $('delete-ok').disabled = false;
-      $('delete-ok').textContent = local ? 'Move to Recycle Bin' : 'Delete for good';
-      if (err.code === 'gone') { dlg.close(); await afterDelete(item, null); toast(err.message, true); }
+      $('delete-ok').textContent = okText;
     }
   };
   dlg.showModal();
@@ -859,15 +898,25 @@ async function afterDelete(item, r) {
 }
 
 function openSave(item) {
+  saveDialog({
+    path: item.path,
+    what: whatText(item),
+    name: item.kind === 'dir' && item.isRoot ? item.path.split('/').filter(Boolean).pop() ?? 'phone' : item.name,
+    isDir: item.kind === 'dir',
+    start: (dest) => api(`/api/scans/${state.scan.id}/pull`, { method: 'POST', body: JSON.stringify({ ...(item.kind === 'dir' ? { dir: item.dirId } : { dir: item.dirId, file: item.name }), dest }) }),
+  });
+}
+
+/** Asks where to save; `start(dest)` starts the copy and gives its task. `name` is null when several items are saved. */
+function saveDialog({ path, what, name, isDir, start }) {
   const dlg = $('save-dialog');
-  $('save-path').textContent = item.path;
-  $('save-what').textContent = whatText(item);
+  $('save-path').textContent = path;
+  $('save-what').textContent = what;
   const dest = $('save-dest');
   dest.value = store.get(SAVE_DEST_KEY) || state.info.downloads || '';
-  const name = item.kind === 'dir' && item.isRoot ? item.path.split('/').filter(Boolean).pop() ?? 'phone' : item.name;
   const note = () => {
     const d = dest.value.trim().replace(/[\\/]+$/, '');
-    $('save-note').textContent = d ? `${item.kind === 'dir' ? 'Saved as the folder' : 'Saved as'} ${d}\\${dragName(name)}. Files already there with the same size are skipped; other files of the same name are kept and the new one saved as “name (2)”.` : '';
+    $('save-note').textContent = d ? `${name == null ? `Saved in ${d}` : `${isDir ? 'Saved as the folder' : 'Saved as'} ${d}\\${dragName(name)}`}. Files already there with the same size are skipped; other files of the same name are kept and the new one saved as “name (2)”.` : '';
   };
   dest.oninput = note;
   note();
@@ -878,12 +927,10 @@ function openSave(item) {
     e.preventDefault();
     $('save-ok').disabled = true;
     try {
-      const task = await api(`/api/scans/${state.scan.id}/pull`, { method: 'POST', body: JSON.stringify({ ...(item.kind === 'dir' ? { dir: item.dirId } : { dir: item.dirId, file: item.name }), dest: dest.value.trim() }) });
+      const task = await start(dest.value.trim());
       store.set(SAVE_DEST_KEY, dest.value.trim());
       dlg.close();
-      state.tasks = [task, ...state.tasks.filter((t) => t.id !== task.id)];
-      renderTasks();
-      pollTasks();
+      addTask(task);
     } catch (err) {
       $('save-error').textContent = err.message;
       $('save-error').hidden = false;
@@ -895,6 +942,13 @@ function openSave(item) {
 }
 
 /* ---------- copies to this PC ---------- */
+
+/** Shows a task just started and follows it. */
+function addTask(task) {
+  state.tasks = [task, ...state.tasks.filter((t) => t.id !== task.id)];
+  renderTasks();
+  pollTasks();
+}
 
 async function pollTasks() {
   clearTimeout(state.taskTimer);
@@ -915,6 +969,7 @@ function taskLine(t) {
 }
 
 const TASK_STATE = { running: 'Copying', done: 'Copied', 'done-errors': 'Copied with problems', failed: 'Copy failed', cancelled: 'Cancelled' };
+const OPEN_STATE = { running: 'Copying to open', done: 'Opened', 'done-errors': 'Not opened', failed: 'Not opened' };
 
 function renderTasks() {
   const box = $('tasks');
@@ -925,7 +980,7 @@ function renderTasks() {
     : null;
   box.replaceChildren(...(clear ? [clear] : []), ...state.tasks.map((t) => h('div', { class: `task ${t.state}` },
     h('div', { class: 'task-head' },
-      h('b', {}, TASK_STATE[t.state] ?? t.state), h('span', { class: 'task-label', title: t.dest ?? '' }, t.label),
+      h('b', {}, (t.kind === 'open' ? OPEN_STATE[t.state] : null) ?? TASK_STATE[t.state] ?? t.state), h('span', { class: 'task-label', title: t.dest ?? '' }, t.label),
       h('span', { class: 'task-buttons' },
         t.state === 'running' ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/cancel`, { method: 'POST' }).then(pollTasks) }, 'Cancel') : null,
         t.state === 'done' || t.state === 'done-errors' ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/reveal`, { method: 'POST' }).catch((err) => toast(err.message, true)) }, 'Show in Explorer') : null,
@@ -1158,6 +1213,8 @@ function renderLegend() {
 
 /* ---------- start ---------- */
 
+const browse = initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, saveDialog, addTask, dragName });
+
 function init() {
   api('/api/version').then((v) => {
     state.info = v;
@@ -1168,13 +1225,14 @@ function init() {
   }).catch(() => {});
   $('mode-local').addEventListener('click', () => setMode('local'));
   $('mode-phone').addEventListener('click', () => setMode('phone'));
+  $('mode-browse').addEventListener('click', () => setMode('browse'));
   $('local-form').addEventListener('submit', (e) => { e.preventDefault(); scanLocal(); });
   $('auto-admin').checked = store.get(AUTO_ADMIN_KEY) !== '0';
   $('auto-admin').addEventListener('change', (e) => store.set(AUTO_ADMIN_KEY, e.target.checked ? '1' : '0'));
   $('phone-form').addEventListener('submit', (e) => { e.preventDefault(); scanPhone(); });
   $('refresh-devices').addEventListener('click', loadDevices);
   $('device').addEventListener('change', onDeviceChange);
-  for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => setTab(b.dataset.tab));
+  for (const b of document.querySelectorAll('.tabs button[data-tab]')) b.addEventListener('click', () => setTab(b.dataset.tab));
   $('map').addEventListener('mousemove', onMapMove);
   $('map').addEventListener('mouseleave', () => { $('tip').hidden = true; });
   $('map').addEventListener('click', onMapClick);
@@ -1210,7 +1268,7 @@ function init() {
   $('phone-path').value = store.get(PHONE_PATH_KEY) ?? '/storage/emulated/0';
   renderLegend();
   loadDrives();
-  setMode(store.get(MODE_KEY) === 'phone' ? 'phone' : 'local');
+  setMode(['phone', 'browse'].includes(store.get(MODE_KEY)) ? store.get(MODE_KEY) : 'local');
 }
 
 init();

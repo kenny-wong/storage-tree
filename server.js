@@ -13,6 +13,7 @@ import { allowed, fail, route } from './lib/http.js';
 import * as sources from './api/sources.js';
 import * as scans from './api/scans.js';
 import * as tasks from './api/tasks.js';
+import * as browse from './api/browse.js';
 import { homedir } from 'node:os';
 
 export const PORT = Number(process.env.PORT) || 8850;
@@ -41,6 +42,15 @@ const ROUTES = [
   ['POST', '/api/scans/:id/protected', scans.readProtected],
   ['POST', '/api/scans/:id/pull', scans.pull],
   ['GET', '/api/scans/:id/file', scans.file],
+  ['GET', '/api/browse/places', browse.places],
+  ['POST', '/api/browse', browse.list],
+  ['GET', '/api/browse/:id/media', browse.media],
+  ['POST', '/api/browse/:id/thumbs', browse.thumbs],
+  ['GET', '/api/browse/:id/file', browse.file],
+  ['POST', '/api/browse/:id/open', browse.open],
+  ['POST', '/api/browse/:id/measure', browse.measure],
+  ['POST', '/api/browse/:id/pull', browse.pull],
+  ['POST', '/api/browse/:id/delete', browse.remove],
   ['GET', '/api/tasks', tasks.list],
   ['POST', '/api/tasks/:id/cancel', tasks.cancel],
   ['POST', '/api/tasks/:id/reveal', tasks.reveal],
@@ -49,7 +59,7 @@ const ROUTES = [
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon' };
 const SECURITY = {
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
 };
@@ -70,7 +80,7 @@ async function readBody(req) {
   const chunks = [];
   for await (const c of req) {
     size += c.length;
-    if (size > 64 * 1024) return null;
+    if (size > 4 * 1024 * 1024) return null; // thousands of selected names fit
     chunks.push(c);
   }
   try {
