@@ -1,6 +1,6 @@
 # Storage Tree
 
-See what fills a disk, on this PC or on an Android phone, and clear it out. Browse a phone's photos and videos without File Explorer's wait.
+See what fills a disk, on this PC or on an Android phone, and clear it out. Browse a phone's photos and videos without File Explorer's wait, and copy files both ways.
 
 **[Download for Windows](https://github.com/kenny-wong/storage-tree/releases/latest)** · Windows 10 or 11 (64-bit) · free, nothing leaves your PC
 
@@ -81,9 +81,11 @@ Choose **Browse phone** at the top right. No scan is needed: folders open one at
 
 ![A phone's Camera folder in the Browse tab: large previews of photos and videos, with places on the left](docs/images/browse.png)
 
-- **Open:** double-click a folder or picture. In the picture viewer, the arrow keys go to the next one, and the wheel zooms. Videos, documents and other pictures (such as HEIC) are copied to this PC and opened in their usual Windows program. Changes you make to such a copy don't go back to the phone.
+- **Open:** double-click a folder, picture or video. In the viewer, the arrow keys go to the next or previous one and the wheel zooms a picture. Videos play straight from the phone and can be wound on at once (Space plays and pauses, Shift+arrow keys jump 5 seconds). Documents and other pictures (such as HEIC), and any video this window can't play, open in their usual Windows program, through a copy on this PC; changes you make to such a copy don't go back to the phone.
 - **Look:** **Large**, **Medium**, **List** or **Details** (dates, sizes, dimensions, video lengths). Sort by any of them, show only pictures or videos, or type part of a name.
-- **Select:** Ctrl and Shift clicks, or Ctrl+A. Right-click for **Save to PC…** and **Delete from phone…**. One file can be dragged into Explorer.
+- **Select:** Ctrl and Shift clicks, or Ctrl+A. Right-click for **Save to PC…**, **Rename…** (or F2) and **Delete from phone…**. One file can be dragged into Explorer.
+- **Copy to the phone:** drag files or folders from Explorer onto the list, or use **Copy from PC**. They go into the folder that is open. As with saving to the PC, nothing is overwritten: the same file already there is skipped and a different one of the same name is kept, with the new one saved as "name (2)". Copied photos and videos keep their dates and show in the phone's gallery.
+- **New folder:** the **New folder** button, or right-click an empty part of the list.
 
 A folder of 10,000 photos takes the phone a few seconds to list the first time. After that it shows at once, also after the app was closed, and is checked for changes in the background. Previews already seen are kept on this PC (up to 600 MB), so a folder seen before needs nothing from the phone to show them. Opened copies are deleted after two days, unless you changed them. To delete it all yourself, remove `%LOCALAPPDATA%\Storage Tree\browse`.
 
@@ -149,7 +151,8 @@ node scripts/screenshots.mjs   # retakes the pictures in docs/images (needs Chro
 - `lib/remove.js`: the Recycle Bin (Windows' `SHFileOperation` through PowerShell) and `rm -rf` on a phone.
 - `lib/browse.js`: lists one phone folder (`find -maxdepth 1 | stat`) and keeps the list; every action names an item of a list, never a path. Dimensions and video lengths come from Android's media index (`content query`).
 - `lib/preview.js`: previews without reading whole files: the one inside a photo (EXIF, in the first 128 KB), then Android's own thumbnail (`.thumbnails/<id>.jpg`), then the whole picture when it is small. Many files are read by one `head -v`.
-- `lib/browse-store.js`: the previews and opened copies kept on this PC, and tidying them up.
+- `lib/browse-store.js`: the previews, folder lists and opened copies kept on this PC, and tidying them up.
+- `lib/push.js`: copies from this PC to a phone. The page sends each file's bytes to the server, which writes them to a temporary file and sends them on with `adb push` under a hidden temporary name, renamed with `mv -n` (never over an existing file) once the size is checked. Videos are played from the phone through HTTP ranges served with `dd skip=… count=…`.
 - `lib/pull.js` and `lib/tasks.js`: copies from a phone, one `adb pull` per file, a few at a time, each written under a temporary `storagetree-….part` name and renamed when complete; a PC name is held while a file is saved to it, so two phone files that become the same Windows name are both kept; background tasks with progress and cancel.
 - `public/`: the page (plain HTML, CSS and ES modules); `treemap.js` is a squarified treemap layout drawn on a canvas, and `browse.js` the Browse tab, which draws only the tiles on screen. Dragging a phone file out uses Chrome's `DownloadURL` drag, which fetches the file from the phone as it is dropped.
 - `electron/`: the desktop app, running the same server in its own window (port 8851).

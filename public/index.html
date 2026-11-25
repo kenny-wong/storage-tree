@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="icon.svg" alt="" width="26" height="26">
       <h1>Storage Tree</h1>
-      <span class="version" id="version">v1.8.1</span>
+      <span class="version" id="version">v1.9.0</span>
     </div>
     <div class="modes" role="tablist" aria-label="What to look at">
       <button type="button" role="tab" id="mode-local" aria-selected="true">This PC</button>
@@ -101,6 +101,10 @@
         <button type="button" class="ghost" id="b-forward" title="Forward (Alt+Right)" aria-label="Forward">→</button>
         <button type="button" class="ghost" id="b-up" title="Up one folder (Backspace)" aria-label="Up one folder">↑</button>
         <button type="button" class="ghost" id="b-reload" title="Read this folder again" aria-label="Reload">⟳</button>
+        <button type="button" class="ghost" id="b-new" title="Make a folder here">New folder</button>
+        <button type="button" class="ghost" id="b-upload" title="Copy files or a folder from this PC into this phone folder (or drag them here from Explorer)" aria-haspopup="menu">Copy from PC ▾</button>
+        <input type="file" id="b-files" multiple hidden>
+        <input type="file" id="b-folder" webkitdirectory hidden>
       </div>
       <nav class="crumbs b-crumbs" id="b-crumbs" aria-label="Phone folder path"></nav>
       <input type="search" id="b-filter" placeholder="Find in this folder" autocomplete="off" spellcheck="false" aria-label="Find in this folder">
@@ -136,6 +140,7 @@
           <div class="b-space" id="b-space"></div>
         </div>
         <div class="b-note" id="b-note" hidden></div>
+        <div class="b-drop" id="b-drop" hidden>Drop to copy into <b id="b-drop-to"></b></div>
         <div class="b-status"><span id="b-count"></span><span id="b-busy"></span></div>
       </section>
     </div>
@@ -153,10 +158,26 @@
     </div>
     <div class="v-stage" id="v-stage" tabindex="0" autofocus>
       <img id="v-img" alt="" draggable="false">
+      <video id="v-video" controls playsinline preload="metadata" hidden title="Space: play or pause · Shift+← →: 5 seconds back or on"></video>
       <p id="v-error" hidden></p>
       <button type="button" class="v-side prev" id="v-prev" aria-label="Previous picture">‹</button>
       <button type="button" class="v-side next" id="v-next" aria-label="Next picture">›</button>
     </div>
+  </dialog>
+
+  <dialog id="name-dialog" class="dialog">
+    <form method="dialog" id="name-form">
+      <h2 id="name-title"></h2>
+      <p class="path" id="name-where"></p>
+      <label class="stack-field">Name
+        <input id="name-input" type="text" autocomplete="off" spellcheck="false" required maxlength="255">
+      </label>
+      <p class="dialog-error" id="name-error" hidden></p>
+      <div class="dialog-buttons">
+        <button type="submit" value="cancel" class="ghost" formnovalidate>Cancel</button>
+        <button type="submit" value="ok" class="primary" id="name-ok">OK</button>
+      </div>
+    </form>
   </dialog>
 
   <div class="menu" id="menu" role="menu" hidden></div>

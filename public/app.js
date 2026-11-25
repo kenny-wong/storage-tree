@@ -970,6 +970,7 @@ function taskLine(t) {
 
 const TASK_STATE = { running: 'Copying', done: 'Copied', 'done-errors': 'Copied with problems', failed: 'Copy failed', cancelled: 'Cancelled' };
 const OPEN_STATE = { running: 'Copying to open', done: 'Opened', 'done-errors': 'Not opened', failed: 'Not opened' };
+const PUSH_STATE = { running: 'Copying to phone', done: 'Copied to phone', 'done-errors': 'Copied to phone with problems', failed: 'Copy to phone failed' };
 
 function renderTasks() {
   const box = $('tasks');
@@ -980,10 +981,10 @@ function renderTasks() {
     : null;
   box.replaceChildren(...(clear ? [clear] : []), ...state.tasks.map((t) => h('div', { class: `task ${t.state}` },
     h('div', { class: 'task-head' },
-      h('b', {}, (t.kind === 'open' ? OPEN_STATE[t.state] : null) ?? TASK_STATE[t.state] ?? t.state), h('span', { class: 'task-label', title: t.dest ?? '' }, t.label),
+      h('b', {}, (t.kind === 'open' ? OPEN_STATE[t.state] : t.kind === 'push' ? PUSH_STATE[t.state] : null) ?? TASK_STATE[t.state] ?? t.state), h('span', { class: 'task-label', title: t.dest ?? '' }, t.label),
       h('span', { class: 'task-buttons' },
         t.state === 'running' ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/cancel`, { method: 'POST' }).then(pollTasks) }, 'Cancel') : null,
-        t.state === 'done' || t.state === 'done-errors' ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/reveal`, { method: 'POST' }).catch((err) => toast(err.message, true)) }, 'Show in Explorer') : null,
+        (t.state === 'done' || t.state === 'done-errors') && t.dest ? h('button', { type: 'button', class: 'ghost', onclick: () => api(`/api/tasks/${t.id}/reveal`, { method: 'POST' }).catch((err) => toast(err.message, true)) }, 'Show in Explorer') : null,
         t.state !== 'running' ? h('button', { type: 'button', class: 'ghost', 'aria-label': 'Remove from the list', title: 'Remove from the list', onclick: () => api(`/api/tasks/${t.id}`, { method: 'DELETE' }).then(pollTasks) }, '✕') : null)),
     meter(t.bytes, t.totalBytes || 1, t.state === 'failed'),
     h('div', { class: 'task-line muted' }, taskLine(t), t.state === 'running' && t.current ? h('span', { class: 'task-current', title: t.current }, ` · ${t.current.split('/').pop()}`) : null),

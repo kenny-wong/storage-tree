@@ -25,8 +25,12 @@ const OPENABLE = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', '
 export const canOpen = (name) => OPENABLE.has(extOf(name));
 
 const VIEWABLE = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']);
-/** Shown in the page's own viewer. */
+/** Pictures shown in the page's own viewer. */
 export const canView = (name) => VIEWABLE.has(extOf(name));
+
+/** Videos played in the viewer, with the type they are served as (QuickTime files are MP4 inside, as far as a browser cares). */
+export const VIDEO_TYPES = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/mp4', '3gp': 'video/3gpp', webm: 'video/webm', mkv: 'video/webm' };
+export const canPlay = (name) => extOf(name) in VIDEO_TYPES;
 
 export const hasPreview = (e) => !e.dir && (['image', 'video'].includes(kindOfEntry(e))) && extOf(e.name) !== 'svg' && extOf(e.name) !== 'ico';
 

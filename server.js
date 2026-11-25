@@ -52,6 +52,11 @@ const ROUTES = [
   ['POST', '/api/browse/:id/measure', browse.measure],
   ['POST', '/api/browse/:id/pull', browse.pull],
   ['POST', '/api/browse/:id/delete', browse.remove],
+  ['POST', '/api/browse/:id/rename', browse.rename],
+  ['POST', '/api/browse/:id/mkdir', browse.makeFolder],
+  ['POST', '/api/browse/:id/push', browse.pushStart],
+  ['PUT', '/api/push/:task/:i', browse.pushFile],
+  ['POST', '/api/push/:task/end', browse.pushEnd],
   ['GET', '/api/tasks', tasks.list],
   ['POST', '/api/tasks/:id/cancel', tasks.cancel],
   ['POST', '/api/tasks/:id/reveal', tasks.reveal],
@@ -102,8 +107,10 @@ export function createApp({ port = PORT } = {}) {
       }
       if (url.pathname.startsWith('/api/')) {
         const hit = route(ROUTES, req.method, url.pathname);
-        const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : null;
-        const out = hit ? await hit.handler({ params: hit.params, query: url.searchParams, body }) : fail(404, 'no-route', 'No such API route.');
+        // A route marked rawBody reads the request itself (a file's bytes); the others get its JSON.
+        const raw = hit?.handler.rawBody;
+        const body = !raw && (req.method === 'POST' || req.method === 'PUT') ? await readBody(req) : null;
+        const out = hit ? await hit.handler({ params: hit.params, query: url.searchParams, body, headers: req.headers, ...(raw ? { req } : {}) }) : fail(404, 'no-route', 'No such API route.');
         if (out.raw) return out.raw(res); // a file's bytes, streamed
         res.writeHead(out.status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
         res.end(JSON.stringify(out.body));

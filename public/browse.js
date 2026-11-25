@@ -3,7 +3,7 @@
 // asked for, many in one request. Folders seen before show at once from
 // memory while the phone is asked again.
 
-import { arrange, canOpen, canView, countText, crumbsOf, extOf, formatLength, formatWhen, hasPreview, kindOfEntry, select, typeName, unpackPreviews, windowOf } from './browse-list.js';
+import { arrange, canOpen, canPlay, canView, countText, crumbsOf, extOf, formatLength, formatWhen, hasPreview, kindOfEntry, select, typeName, unpackPreviews, windowOf } from './browse-list.js';
 import { formatBytes, formatCount } from './format.js';
 
 const SETTINGS_KEY = 'storage-tree:browse:v1';
@@ -432,7 +432,7 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
 
   function openEntry(e) {
     if (e.dir) go(fullPath(e.name));
-    else if (canView(e.name)) view(e);
+    else if (canView(e.name) || canPlay(e.name)) view(e);
     else if (canOpen(e.name)) openInWindows(e, folder);
     else toast('This kind of file isn’t opened from here. Save it to the PC first.');
   }
@@ -522,9 +522,11 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     const one = items.length === 1;
     const actions = [];
     if (one && e.dir) actions.push({ label: 'Open', run: () => openEntry(e) });
-    if (one && !e.dir && canView(e.name)) actions.push({ label: 'View', run: () => view(e) });
+    if (one && !e.dir && (canView(e.name) || canPlay(e.name))) actions.push({ label: canPlay(e.name) ? 'Play' : 'View', run: () => view(e) });
     if (one && !e.dir && canOpen(e.name)) actions.push({ label: 'Open in Windows', run: () => openInWindows(e, at) });
-    actions.push({ label: 'Save to PC…', run: () => save(items, at) }, { label: 'Delete from phone…', danger: true, run: () => remove(items, at) });
+    actions.push({ label: 'Save to PC…', run: () => save(items, at) });
+    if (one) actions.push({ label: 'Rename…', run: () => rename(e, at) });
+    actions.push({ label: 'Delete from phone…', danger: true, run: () => remove(items, at) });
     showMenu(ev, one ? e.name : `${formatCount(items.length)} items`, one ? fullPath(e.name) : at.path, actions);
   }
 
@@ -539,6 +541,130 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     sel = { selected: new Set(shown.map((e) => e.name)), anchor: shown[0]?.name ?? null };
     mark();
     renderCount();
+  }
+
+  /** Asks for a name; `run(name)` does the work and throws what the dialog should say. */
+  function askName({ title, where, value, run }) {
+    const dlg = $('name-dialog');
+    const input = $('name-input');
+    $('name-title').textContent = title;
+    $('name-where').textContent = where;
+    $('name-error').hidden = true;
+    $('name-ok').disabled = false;
+    input.value = value;
+    $('name-form').onsubmit = async (ev) => {
+      if (ev.submitter?.value !== 'ok') return;
+      ev.preventDefault();
+      $('name-ok').disabled = true;
+      try {
+        await run(input.value.trim());
+        dlg.close();
+      } catch (err) {
+        $('name-error').textContent = err.message;
+        $('name-error').hidden = false;
+        $('name-ok').disabled = false;
+      }
+    };
+    dlg.showModal();
+    input.focus();
+    const dot = value.lastIndexOf('.');
+    input.setSelectionRange(0, dot > 0 ? dot : value.length); // the name without its extension, as Explorer does
+  }
+
+  function rename(e, at) {
+    if (at.stale) return toast('Still checking this folder on the phone; try again in a moment.', true);
+    askName({
+      title: `Rename this ${e.dir ? 'folder' : 'file'}`,
+      where: `${at.path}/`,
+      value: e.name,
+      async run(to) {
+        const r = await api(`/api/browse/${at.id}/rename`, { method: 'POST', body: JSON.stringify({ name: e.name, to }) });
+        const x = at.entries.find((y) => y.name === e.name);
+        if (x) x.name = r.name;
+        if (at.media[e.name]) {
+          at.media[r.name] = at.media[e.name];
+          delete at.media[e.name];
+        }
+        if (folder !== at) return;
+        sel = { selected: new Set([r.name]), anchor: r.name };
+        cursor = r.name;
+        render();
+        reveal(r.name);
+      },
+    });
+  }
+
+  function newFolder() {
+    const at = folder;
+    if (!at) return;
+    if (at.stale) return toast('Still checking this folder on the phone; try again in a moment.', true);
+    const names = new Set(at.entries.map((e) => e.name.toLowerCase()));
+    let name = 'New folder';
+    for (let n = 2; names.has(name.toLowerCase()); n++) name = `New folder (${n})`;
+    askName({
+      title: 'New folder',
+      where: `${at.path}/`,
+      value: name,
+      async run(chosen) {
+        const r = await api(`/api/browse/${at.id}/mkdir`, { method: 'POST', body: JSON.stringify({ name: chosen }) });
+        at.entries.push(r.entry);
+        if (folder !== at) return;
+        sel = { selected: new Set([r.entry.name]), anchor: r.entry.name };
+        cursor = r.entry.name;
+        render();
+        reveal(r.entry.name);
+      },
+    });
+  }
+
+  /** Everything inside what was dropped: [{ rel: [names], file }], folders walked through. */
+  async function dropped(dt) {
+    const out = [];
+    const walk = async (entry, rel) => {
+      if (entry.isFile) {
+        const file = await new Promise((ok, no) => entry.file(ok, no));
+        out.push({ rel: [...rel, entry.name], file });
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        for (;;) { // readEntries gives up to 100 at a time
+          const batch = await new Promise((ok, no) => reader.readEntries(ok, no));
+          if (!batch.length) break;
+          for (const x of batch) await walk(x, [...rel, entry.name]);
+        }
+      }
+    };
+    const entries = [...dt.items].filter((i) => i.kind === 'file').map((i) => i.webkitGetAsEntry()).filter(Boolean);
+    for (const e of entries) await walk(e, []);
+    return out;
+  }
+
+  /** Copies files from this PC into the folder open now: the server says where each goes, then gets them one by one. */
+  async function upload(list) {
+    const at = folder;
+    if (!at || !list.length) return;
+    if (at.stale) return toast('Still checking this folder on the phone; try again in a moment.', true);
+    busy('Getting ready to copy…');
+    let r;
+    try {
+      r = await api(`/api/browse/${at.id}/push`, { method: 'POST', body: JSON.stringify({ items: list.map((x) => ({ rel: x.rel, size: x.file.size, mtime: Math.floor(x.file.lastModified / 1000) })) }) });
+    } catch (err) {
+      busy('');
+      return failed(err);
+    } finally {
+      busy('');
+    }
+    addTask(r.task);
+    for (const f of r.files) {
+      const res = await fetch(`/api/push/${r.task.id}/${f.i}`, { method: 'PUT', body: f.skip ? '' : list[f.i].file }).catch(() => null);
+      if (!res?.ok) break; // cancelled, or the copy failed: the task says why
+    }
+    await fetch(`/api/push/${r.task.id}/end`, { method: 'POST' }).catch(() => {});
+    for (;;) { // read the folder again when the copy is over, if it is still open
+      const t = (await api('/api/tasks').catch(() => ({ tasks: [] }))).tasks.find((x) => x.id === r.task.id);
+      if (!t || t.state !== 'running') break;
+      await new Promise((ok) => setTimeout(ok, 800));
+    }
+    if (folder?.path === r.path && device) go(path, { step: false });
   }
 
   /* ---------- pointer and keys ---------- */
@@ -563,7 +689,12 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
   scroll.addEventListener('contextmenu', (ev) => {
     const e = cellAt(ev);
     if (e) menuFor(ev, e);
-    else if (folder) showMenu(ev, crumbsOf(path).at(-1)[0], path, [{ label: 'Reload', run: () => go(path, { step: false }) }, { label: 'Select all', run: selectAll }]);
+    else if (folder) {
+      showMenu(ev, crumbsOf(path).at(-1)[0], path, [
+        { label: 'New folder…', run: newFolder }, { label: 'Copy files from PC…', run: () => $('b-files').click() }, { label: 'Copy a folder from PC…', run: () => $('b-folder').click() },
+        { label: 'Reload', run: () => go(path, { step: false }) }, { label: 'Select all', run: selectAll },
+      ]);
+    }
   });
   scroll.addEventListener('dragstart', (ev) => {
     const e = cellAt(ev);
@@ -610,6 +741,10 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
       if (shown[at]) openEntry(shown[at]);
     } else if (ev.key === 'Backspace') up();
     else if (ev.key === 'Delete') remove(picked(), folder);
+    else if (ev.key === 'F2') {
+      const items = picked();
+      if (items.length === 1) rename(items[0], folder);
+    }
     else if (ev.key.length === 1 && ev.key !== ' ') { // jump to the name typed
       if (Date.now() - typedAt > 900) typed = '';
       typedAt = Date.now();
@@ -636,6 +771,50 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     ev.preventDefault();
     if (ev.button === 3) step(back, forward);
     else step(forward, back);
+  });
+  $('b-new').addEventListener('click', newFolder);
+  $('b-upload').addEventListener('click', (ev) => {
+    if (!folder) return;
+    showMenu(ev, 'Copy into', path, [{ label: 'Files…', run: () => $('b-files').click() }, { label: 'A folder…', run: () => $('b-folder').click() }]);
+  });
+  $('b-files').addEventListener('change', (ev) => {
+    upload([...ev.target.files].map((file) => ({ rel: [file.name], file })));
+    ev.target.value = '';
+  });
+  $('b-folder').addEventListener('change', (ev) => {
+    upload([...ev.target.files].map((file) => ({ rel: file.webkitRelativePath.split('/').filter(Boolean), file })));
+    ev.target.value = '';
+  });
+  // Files dragged in from Explorer (not this list's own tiles, which carry no files).
+  const fromOutside = (ev) => [...(ev.dataTransfer?.types ?? [])].includes('Files');
+  let dragDepth = 0;
+  const list = scroll.parentElement;
+  list.addEventListener('dragenter', (ev) => {
+    if (!fromOutside(ev) || !folder) return;
+    dragDepth++;
+    $('b-drop-to').textContent = crumbsOf(path).at(-1)[0];
+    $('b-drop').hidden = false;
+  });
+  list.addEventListener('dragover', (ev) => {
+    if (!fromOutside(ev) || !folder) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+  });
+  list.addEventListener('dragleave', (ev) => {
+    if (!fromOutside(ev)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) $('b-drop').hidden = true;
+  });
+  list.addEventListener('drop', async (ev) => {
+    if (!fromOutside(ev)) return;
+    ev.preventDefault();
+    dragDepth = 0;
+    $('b-drop').hidden = true;
+    try {
+      upload(await dropped(ev.dataTransfer));
+    } catch (err) {
+      toast(`Couldn’t read what was dropped: ${err.message}`, true);
+    }
   });
   $('b-back').addEventListener('click', () => step(back, forward));
   $('b-forward').addEventListener('click', () => step(forward, back));
@@ -677,6 +856,7 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
 
   const dlg = $('viewer');
   const img = $('v-img');
+  const vid = $('v-video');
   const fulls = new Map(); // file address -> { promise of a blob address, stop }
   let seen = []; // the pictures that can be gone through
   let pos = 0;
@@ -687,7 +867,7 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
 
   function view(e) {
     home = folder;
-    seen = shown.filter((x) => !x.dir && canView(x.name));
+    seen = shown.filter((x) => !x.dir && (canView(x.name) || canPlay(x.name)));
     pos = Math.max(0, seen.findIndex((x) => x.name === e.name));
     if (!dlg.open) dlg.showModal();
     show();
@@ -713,9 +893,17 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     fulls.delete(url);
   }
 
+  function stopVideo() {
+    vid.pause();
+    vid.removeAttribute('src');
+    vid.removeAttribute('poster');
+    vid.load(); // ends its requests to the phone
+    vid.hidden = true;
+  }
+
   /** Keeps the pictures around the one shown. */
   function trim() {
-    const near = new Set([-1, 0, 1].map((d) => seen[pos + d]).filter(Boolean).map(address));
+    const near = new Set([-1, 0, 1].map((d) => seen[pos + d]).filter((x) => x && canView(x.name)).map(address));
     for (const [url, f] of [...fulls]) if (!near.has(url) && fulls.size > MAX_FULL) drop(url, f);
   }
 
@@ -728,6 +916,21 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
     $('v-prev').disabled = pos === 0;
     $('v-next').disabled = pos === seen.length - 1;
     $('v-error').hidden = true;
+    $('v-zoom').hidden = canPlay(e.name);
+    if (canPlay(e.name)) { // played as it arrives, by ranges: no waiting for the whole file
+      img.hidden = true;
+      img.removeAttribute('src');
+      fit();
+      vid.hidden = false;
+      if (small) vid.poster = small;
+      else vid.removeAttribute('poster');
+      vid.src = address(e);
+      vid.dataset.name = e.name;
+      vid.play().catch(() => {}); // refused only without a click first; the controls are there
+      vid.focus();
+      return;
+    }
+    if (!vid.hidden) stopVideo();
     img.hidden = !small;
     img.className = 'soft';
     if (small) img.src = small;
@@ -744,7 +947,7 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
       img.className = '';
       info(ready.naturalWidth, ready.naturalHeight);
       fit();
-      for (const d of [1, -1]) if (seen[pos + d]) load(seen[pos + d]).catch(() => {});
+      for (const d of [1, -1]) if (seen[pos + d] && canView(seen[pos + d].name)) load(seen[pos + d]).catch(() => {});
       trim();
     } catch (err) {
       if (seen[pos] !== e || !dlg.open || err.name === 'AbortError') return;
@@ -791,13 +994,25 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
   };
   const toggleZoom = (cx, cy) => (zoom.s > 1 ? fit() : zoomAt(Math.max(1.5, 1 / fitScale()), cx, cy));
 
+  vid.addEventListener('loadedmetadata', () => {
+    const e = seen[pos];
+    if (!e || vid.dataset.name !== e.name) return;
+    $('v-info').textContent = [`${formatCount(pos + 1)} of ${formatCount(seen.length)}`, `${vid.videoWidth} × ${vid.videoHeight}`, formatLength(vid.duration * 1000), formatBytes(e.size), formatWhen(e.mtime)].filter(Boolean).join(' · ');
+  });
+  vid.addEventListener('error', () => {
+    if (vid.hidden || !vid.getAttribute('src')) return;
+    $('v-error').hidden = false;
+    $('v-error').textContent = vid.error?.code === 4 ? 'This video can’t be played here (its format isn’t supported by this window). Try “Open in Windows”.' : 'The phone stopped sending this video. Check the cable and try again.';
+  });
+
   $('v-stage').addEventListener('wheel', (ev) => {
+    if (!vid.hidden) return;
     ev.preventDefault();
     zoomAt(zoom.s * (ev.deltaY < 0 ? 1.2 : 1 / 1.2), ev.clientX, ev.clientY);
   }, { passive: false });
   img.addEventListener('dblclick', (ev) => toggleZoom(ev.clientX, ev.clientY));
   $('v-stage').addEventListener('pointerdown', (ev) => {
-    if (ev.target.closest('button') || zoom.s <= 1 || ev.button !== 0) return;
+    if (ev.target.closest('button') || !vid.hidden || zoom.s <= 1 || ev.button !== 0) return;
     const from = { x: ev.clientX - zoom.x, y: ev.clientY - zoom.y };
     const st = $('v-stage');
     st.setPointerCapture(ev.pointerId);
@@ -820,16 +1035,29 @@ export function initBrowse({ $, h, api, store, toast, showMenu, deleteDialog, sa
   $('v-open').addEventListener('click', () => openInWindows(seen[pos], home));
   $('v-save').addEventListener('click', () => save([seen[pos]], home));
   $('v-close').addEventListener('click', () => dlg.close());
+  // Caught before the video's own controls, so the arrows always go to the next or previous item.
   dlg.addEventListener('keydown', (ev) => {
-    if (ev.key === 'ArrowRight') turnTo(1);
+    const playing = !vid.hidden;
+    if (playing && ev.shiftKey && (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft')) vid.currentTime = Math.max(0, vid.currentTime + (ev.key === 'ArrowRight' ? 5 : -5));
+    else if (ev.key === 'ArrowRight') turnTo(1);
     else if (ev.key === 'ArrowLeft') turnTo(-1);
-    else if (ev.key === ' ' && !ev.target.closest('button')) toggleZoom(...middle());
-    else if (ev.key === '+' || ev.key === '=') zoomAt(zoom.s * 1.25, ...middle());
+    else if (ev.key === ' ' && playing && !ev.target.closest('button')) {
+      if (vid.paused) vid.play().catch(() => {});
+      else vid.pause();
+    } else if (ev.key === ' ' && !ev.target.closest('button')) toggleZoom(...middle());
+    else return;
+    ev.preventDefault();
+    ev.stopPropagation();
+  }, true);
+  dlg.addEventListener('keydown', (ev) => {
+    if (!vid.hidden) return;
+    if (ev.key === '+' || ev.key === '=') zoomAt(zoom.s * 1.25, ...middle());
     else if (ev.key === '-') zoomAt(zoom.s / 1.25, ...middle());
     else return;
     ev.preventDefault();
   });
   dlg.addEventListener('close', () => {
+    stopVideo();
     for (const [url, f] of [...fulls]) drop(url, f);
     img.removeAttribute('src');
     scroll.focus();

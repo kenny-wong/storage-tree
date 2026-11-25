@@ -1,9 +1,9 @@
 {
   "name": "storage-tree",
   "productName": "Storage Tree",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "private": true,
-  "description": "See what fills a disk: folder tree, treemap, largest files and file types for folders on this PC and for an Android phone over USB or Wi-Fi (through adb). Browse a phone's photos, videos and files with previews, delete to the Recycle Bin, copy phone files to the PC.",
+  "description": "See what fills a disk: folder tree, treemap, largest files and file types for folders on this PC and for an Android phone over USB or Wi-Fi (through adb). Browse a phone's photos, videos and files with previews, play its videos, copy files to it, delete to the Recycle Bin, copy phone files to the PC.",
   "author": "Kenny Wong",
   "license": "MIT",
   "type": "module",
